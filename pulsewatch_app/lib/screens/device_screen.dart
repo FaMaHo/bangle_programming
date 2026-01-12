@@ -225,85 +225,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
                     fontSize: 14,
                   ),
                 ),
-                
-                // Device Type Badge (when connected)
-                if (isConnected && _bleService.currentDeviceType != DeviceType.unknown) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: _getDeviceColor().withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _getDeviceColor(), width: 1),
-                    ),
-                    child: Text(
-                      _bleService.currentDeviceType == DeviceType.tWatch 
-                          ? '📡 Live Streaming' 
-                          : '📁 File Transfer',
-                      style: TextStyle(
-                        color: _getDeviceColor(),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-                
-                const SizedBox(height: 20),
 
-                // Transfer Progress
-                if (_transferProgress != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              _bleService.currentDeviceType == DeviceType.tWatch 
-                                  ? 'Monitoring...' 
-                                  : 'Syncing...',
-                              style: const TextStyle(
-                                color: AppColors.textPrimary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              '${_transferProgress!.recordsReceived} records',
-                              style: TextStyle(
-                                color: _getDeviceColor(),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        LinearProgressIndicator(
-                          value: _bleService.isTransferring ? null : 1.0,
-                          backgroundColor: Colors.grey[200],
-                          valueColor: AlwaysStoppedAnimation<Color>(_getDeviceColor()),
-                          minHeight: 8,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _transferProgress!.status,
-                          style: const TextStyle(
-                            color: AppColors.textSecondary,
-                            fontSize: 12,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
+                const SizedBox(height: 20);
 
                 // Action Buttons
                 if (!isConnected) ...[
@@ -329,70 +252,33 @@ class _DeviceScreenState extends State<DeviceScreen> {
                     ),
                   ),
                 ] else ...[
-                  // Sync Button (only show for Bangle.js)
-                  if (_bleService.currentDeviceType == DeviceType.bangleJS) ...[
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _bleService.isTransferring ? null : _syncData,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryGreen,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(_bleService.isTransferring 
-                                ? Icons.sync 
-                                : Icons.sync_outlined),
-                            const SizedBox(width: 8),
-                            Text(
-                              _bleService.isTransferring ? 'Syncing...' : 'Sync Data from Watch',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                  // Info message - Data streaming automatically
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryGreen.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.primaryGreen.withOpacity(0.3)),
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  
-                  // Info message for T-Watch
-                  if (_bleService.currentDeviceType == DeviceType.tWatch) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.secondaryCoral.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.secondaryCoral.withOpacity(0.3)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.info_outline, color: AppColors.secondaryCoral, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'T-Watch streams data automatically',
-                              style: TextStyle(
-                                color: AppColors.secondaryCoral,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline, color: AppColors.primaryGreen, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Connected - Data streaming automatically',
+                            style: TextStyle(
+                              color: AppColors.primaryGreen,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                  ],
+                  ),
+                  const SizedBox(height: 12),
                   
                   // Disconnect Button
                   SizedBox(

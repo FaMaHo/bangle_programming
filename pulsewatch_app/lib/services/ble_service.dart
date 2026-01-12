@@ -151,6 +151,12 @@ class BleService {
       }
 
       print("✅ Connected successfully to $_currentDeviceType!");
+
+      // Auto-start recording on Bangle.js
+      if (_currentDeviceType == DeviceType.bangleJS) {
+        await _autoStartRecording();
+      }
+
       return true;
       
     } catch (e) {
@@ -342,13 +348,30 @@ class BleService {
   // BANGLE.JS - SEND COMMAND VIA UART
   Future<void> _sendCommandBangle(String command) async {
     if (_bangleUartTxCharacteristic == null) return;
-    
+
     try {
       List<int> bytes = utf8.encode(command + '\n');
       await _bangleUartTxCharacteristic!.write(bytes, withoutResponse: false);
       print("📤 Sent to Bangle: $command");
     } catch (e) {
       print("Error sending command: $e");
+    }
+  }
+
+  // AUTO-START RECORDING ON CONNECTION
+  Future<void> _autoStartRecording() async {
+    try {
+      // Wait a moment for watch to be fully ready
+      await Future.delayed(Duration(milliseconds: 500));
+
+      // Send command to start recording
+      // This calls the pulsewatch library's start() method
+      await _sendCommandBangle('require("pulsewatch").start()');
+
+      print("🎬 Auto-started recording on Bangle.js");
+    } catch (e) {
+      print("⚠️ Could not auto-start recording: $e");
+      // Non-fatal error - connection still works
     }
   }
 

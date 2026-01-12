@@ -1,3 +1,12 @@
+FLUTTER APP v1.1.0: UI Improvements + Auto-Start Recording (2025-01-12)
+- NEW: Watch automatically starts recording when connected (no manual toggle!)
+- NEW: Live connection status on Today screen with real-time readings counter
+- IMPROVED: Device screen simplified - removed confusing "File Transfer" badge
+- IMPROVED: Clean UI showing "Connected - Data streaming automatically"
+- IMPROVED: Live data counter now visible on home screen (Today tab)
+- UX: User just connects watch → data flows automatically
+- UX: No more manual recording toggle needed on watch
+
 0.04: Fix Timestamp Format + Database Migration (2025-01-12)
 - CRITICAL FIX: Timestamps now integers (Math.floor) instead of floats with decimals
 - Fixes parsing error: "FormatException: Invalid radix-10 number" in Flutter app
