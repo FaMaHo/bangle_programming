@@ -3,6 +3,7 @@ import 'theme/app_theme.dart';
 import 'screens/today_screen.dart';
 import 'screens/insights_screen.dart';
 import 'screens/device_screen.dart';
+import 'screens/server_screen.dart';
 
 void main() {
   runApp(const PulseWatchApp());
@@ -36,6 +37,7 @@ class _MainNavigationState extends State<MainNavigation> {
     TodayScreen(),
     InsightsScreen(),
     DeviceScreen(),
+    ServerScreen(),
   ];
 
   @override
@@ -67,6 +69,11 @@ class _MainNavigationState extends State<MainNavigation> {
             icon: Icon(Icons.watch_outlined),
             selectedIcon: Icon(Icons.watch),
             label: 'Device',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.cloud_upload_outlined),
+            selectedIcon: Icon(Icons.cloud_upload),
+            label: 'Server',
           ),
         ],
       ),

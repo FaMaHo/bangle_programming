@@ -30,6 +30,9 @@ dependencies:
   # CSV Sharing
   share_plus: ^7.2.1
 
+  # Settings Storage
+  shared_preferences: ^2.2.2
+
   # Icons
   cupertino_icons: ^1.0.8
 
