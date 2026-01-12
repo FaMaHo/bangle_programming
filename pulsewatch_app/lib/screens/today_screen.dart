@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/database_helper.dart';
+import '../services/ble_service.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 class TodayScreen extends StatefulWidget {
   const TodayScreen({super.key});
@@ -12,24 +14,50 @@ class TodayScreen extends StatefulWidget {
 
 class _TodayScreenState extends State<TodayScreen> {
   final DatabaseHelper _db = DatabaseHelper.instance;
-  
+  final BleService _bleService = BleService();
+
   int _minHR = 0;
   int _maxHR = 0;
   int _avgHR = 0;
   int _totalReadings = 0;
-  
+  bool _isConnected = false;
+  int _liveRecordsReceived = 0;
+
   Timer? _statsTimer;
+  StreamSubscription? _connectionSubscription;
+  StreamSubscription? _transferSubscription;
 
   @override
   void initState() {
     super.initState();
-    
+
     // Load initial stats
     _loadStats();
-    
+
     // Refresh stats every 5 seconds
     _statsTimer = Timer.periodic(Duration(seconds: 5), (_) {
       _loadStats();
+    });
+
+    // Subscribe to connection status
+    _connectionSubscription = _bleService.connectionStateStream.listen((state) {
+      if (mounted) {
+        setState(() {
+          _isConnected = (state == BluetoothConnectionState.connected);
+          if (!_isConnected) {
+            _liveRecordsReceived = 0;
+          }
+        });
+      }
+    });
+
+    // Subscribe to transfer progress (live data)
+    _transferSubscription = _bleService.transferProgressStream.listen((progress) {
+      if (mounted) {
+        setState(() {
+          _liveRecordsReceived = progress.recordsReceived;
+        });
+      }
     });
   }
   
@@ -50,6 +78,8 @@ class _TodayScreenState extends State<TodayScreen> {
   @override
   void dispose() {
     _statsTimer?.cancel();
+    _connectionSubscription?.cancel();
+    _transferSubscription?.cancel();
     super.dispose();
   }
 
@@ -80,6 +110,63 @@ class _TodayScreenState extends State<TodayScreen> {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 24),
+
+          // Live Connection Status
+          if (_isConnected)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primaryGreen.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryGreen,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.watch,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Watch Connected',
+                          style: TextStyle(
+                            color: AppColors.primaryGreen,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          'Live: $_liveRecordsReceived readings',
+                          style: TextStyle(
+                            color: AppColors.primaryGreen.withOpacity(0.8),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.radio_button_checked,
+                    color: AppColors.primaryGreen,
+                    size: 16,
+                  ),
+                ],
+              ),
+            ),
 
           // Signal Score Card
           Container(
