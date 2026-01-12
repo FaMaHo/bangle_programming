@@ -5,7 +5,7 @@ Quick checklist for deploying to your Windows 11 server via TeamViewer.
 ## 📋 Pre-Deployment Checklist
 
 - [ ] Reserve server time in group chat (at least 1 day in advance)
-- [ ] Have TeamViewer credentials ready (ID: 1010587657, Password: HanLab608)
+- [ ] Have TeamViewer credentials ready (contact administrator for access)
 - [ ] Ensure you have admin access to the server
 
 ---
@@ -226,7 +226,7 @@ docker-compose restart
 
 ## 📞 Support Contacts
 
-- **Server Access:** TeamViewer ID 1010587657
+- **Server Access:** Contact administrator for TeamViewer credentials
 - **Usage Scheduling:** Post in group chat 1 day in advance
 - **GitHub Issues:** https://github.com/YOUR_USERNAME/bangle_programming/issues
 - **Full Documentation:** See `docs/WINDOWS_SERVER_DEPLOYMENT.md`

@@ -9,7 +9,7 @@ This guide explains how to deploy the PulseWatch AI backend on your Windows 11 s
 - **RAM:** 64 GB
 - **Storage:** 4 TB SSD
 - **OS:** Windows 11
-- **Remote Access:** TeamViewer ID: 1010587657 (Password: HanLab608)
+- **Remote Access:** TeamViewer (contact administrator for credentials)
 
 ## Deployment Overview
 
@@ -630,7 +630,7 @@ When adding PostgreSQL/TimescaleDB:
 ## Contact and Support
 
 - **GitHub Issues:** https://github.com/YOUR_USERNAME/bangle_programming/issues
-- **Server Access:** TeamViewer ID 1010587657
+- **Server Access:** Contact administrator for TeamViewer credentials
 - **Usage Scheduling:** Post in group chat at least 1 day in advance
 
 ---

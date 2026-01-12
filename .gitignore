@@ -98,3 +98,35 @@ Desktop.ini
 
 # Docker (if any)
 .dockerignore
+
+# Sensitive data and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+credentials.json
+secrets.json
+config/secrets.yml
+
+# Patient data and uploads (CRITICAL - contains medical data)
+patient_data/
+uploads/
+**/patient_data/
+**/uploads/
+# Ignore CSV files in data directories only (allow test files in code directories)
+patient_data/**/*.csv
+uploads/**/*.csv
+server/uploads/**/*.csv
+
+# TeamViewer and remote access logs
+teamviewer.log
+*.tvs
+
+# Backups
+*.backup
+*.bak
+backup/
+backups/
