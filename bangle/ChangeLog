@@ -7,6 +7,21 @@
 - Added data wildcard for CSV files in metadata
 - Format: lib.js → "pulsewatch" (no extension) for proper require()
 
+INTEGRATION REVIEW - Flutter App ✅
+- ble_service.dart: Correctly subscribes to Nordic UART RX (UUID 6e400003)
+- Parses 6-field CSV format: timestamp,bpm,confidence,accel_x,accel_y,accel_z
+- Saves to database immediately with insertHeartRateWithTimestamp() and insertAccelerometerWithTimestamp()
+- Updates UI with live status: "Live HR: X BPM • Y readings"
+- today_screen.dart: Auto-refreshes every 5 seconds to show Signal Score, Min/Avg/Max HR
+- insights_screen.dart: Shows weekly activity summary and data quality metrics
+- database_helper.dart: Schema verified correct with proper indexes
+
+USAGE NOTES:
+- Recording must be manually enabled on watch (RECORD toggle in PulseWatch menu) before data transmission begins
+- Watch will show green dot widget indicator when recording is active
+- Flutter app will show live readings counter when receiving data
+- Debug messages on watch console every 10 readings for monitoring
+
 0.02: Added control interface
 - App now appears in launcher menu
 - View status (recording state, file count, storage used)
