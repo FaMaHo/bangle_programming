@@ -1,3 +1,12 @@
+0.03: BLE Fix + App Loader Compatibility (2025-01-12)
+- FIXED: BLE transmission now uses Bluetooth.println() instead of NRF.send()
+- Now sends data via proper Nordic UART Service (UUID 6e400002/6e400003)
+- Live data streaming to Flutter app working
+- Added debug logging every 10 readings
+- Updated metadata.json for BangleApps App Loader compatibility
+- Added data wildcard for CSV files in metadata
+- Format: lib.js → "pulsewatch" (no extension) for proper require()
+
 0.02: Added control interface
 - App now appears in launcher menu
 - View status (recording state, file count, storage used)
