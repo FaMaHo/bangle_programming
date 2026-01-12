@@ -14,22 +14,83 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def home():
     return "PulseWatch AI Backend is Running!"
 
+@app.route('/upload', methods=['POST'])
+def upload_data():
+    """
+    Primary upload endpoint for Flutter App.
+    Receives CSV data as raw body with Content-Type: text/csv
+
+    Headers:
+    - Content-Type: text/csv
+    - X-Device-ID: Device identifier
+    - X-Patient-ID: (optional) Patient identifier
+    - X-Session-ID: (optional) Session identifier
+    """
+    try:
+        # Get CSV data from request body
+        csv_data = request.data.decode('utf-8')
+
+        if not csv_data:
+            return jsonify({'error': 'No data received'}), 400
+
+        # Count records (excluding header)
+        lines = csv_data.strip().split('\n')
+        record_count = len(lines) - 1  # Subtract header
+
+        # Get metadata from headers
+        device_id = request.headers.get('X-Device-ID', 'unknown')
+        patient_id = request.headers.get('X-Patient-ID', 'unknown')
+        session_id = request.headers.get('X-Session-ID', datetime.now().strftime('%Y%m%d_%H%M%S'))
+
+        # Create folder structure: patient_data/patient_id/session_id/
+        save_path = os.path.join(UPLOAD_FOLDER, patient_id, session_id)
+        os.makedirs(save_path, exist_ok=True)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'pulsewatch_data_{timestamp}_{device_id}.csv'
+        full_path = os.path.join(save_path, filename)
+
+        # Save CSV file
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(csv_data)
+
+        print(f"\n✅ Received upload from {device_id}")
+        print(f"   Patient: {patient_id}")
+        print(f"   Session: {session_id}")
+        print(f"   Records: {record_count}")
+        print(f"   Saved to: {full_path}")
+        print(f"   Size: {len(csv_data)} bytes\n")
+
+        return jsonify({
+            'success': True,
+            'message': f'Successfully uploaded {record_count} records',
+            'filename': filename,
+            'records': record_count,
+            'path': full_path
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error in /upload: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/upload_chunk', methods=['POST'])
 def upload_chunk():
     """
     Receives a CSV chunk from the Flutter App.
     Expected data: file, patient_id, session_id, chunk_index
-    
+
     [LEGACY ENDPOINT - kept for backward compatibility]
     """
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
+
     file = request.files['file']
     patient_id = request.form.get('patient_id', 'unknown')
     session_id = request.form.get('session_id', 'session_001')
     chunk_index = request.form.get('chunk_index', '0')
-    
+
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
@@ -37,12 +98,12 @@ def upload_chunk():
         # Create a folder for this specific patient/session
         save_path = os.path.join(UPLOAD_FOLDER, patient_id, session_id)
         os.makedirs(save_path, exist_ok=True)
-        
+
         # Save the file (e.g., chunk_1.csv)
         filename = f"chunk_{chunk_index}.csv"
         full_path = os.path.join(save_path, filename)
         file.save(full_path)
-        
+
         print(f"✅ Received Data: Patient {patient_id} - Chunk {chunk_index}")
         return jsonify({"message": "Chunk uploaded successfully", "path": full_path}), 200
 
