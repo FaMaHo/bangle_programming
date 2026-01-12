@@ -1,0 +1,14 @@
+0.02: Added control interface
+- App now appears in launcher menu
+- View status (recording state, file count, storage used)
+- View statistics (detailed info)
+- Delete data manually (for testing)
+- Toggle recording on/off
+- Green dot widget indicator
+
+0.01: Initial release
+- Background heart rate monitoring
+- Accelerometer data collection
+- Automatic 5-minute interval saves (testing)
+- Green dot widget indicator
+- Silent operation - no user interaction needed

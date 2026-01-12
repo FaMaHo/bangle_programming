@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  backend:
+    image: pulsewatch-backend:latest
+    build: .
+    container_name: pulsewatch_backend
+    restart: always
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./patient_data:/app/patient_data

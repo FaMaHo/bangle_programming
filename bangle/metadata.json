@@ -1,0 +1,16 @@
+{
+  "id": "pulsewatch",
+  "name": "PulseWatch AI",
+  "shortName": "PulseWatch",
+  "version": "0.03",
+  "description": "Background heart rate and motion data collector for cardiovascular research.",
+  "icon": "app.png",
+  "tags": "health,medical,research,widget",
+  "storage": [
+    {"name":"pulsewatch","url":"lib.js"},
+    {"name":"pulsewatch.boot.js","url":"boot.js"},
+    {"name":"pulsewatch.app.js","url":"app.js"},
+    {"name":"pulsewatch.wid.js","url":"widget.js"},
+    {"name":"pulsewatch.img","url":"app-icon.js","evaluate":true}
+  ]
+}
