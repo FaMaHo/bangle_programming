@@ -91,9 +91,9 @@ if __name__ == '__main__':
     print("🏥 PulseWatch AI - Test Server")
     print("=" * 60)
     print(f"\n📁 Upload directory: {os.path.abspath(UPLOAD_DIR)}")
-    print(f"\n🌐 Server starting on http://0.0.0.0:5000")
+    print(f"\n🌐 Server starting on http://0.0.0.0:5001")
     print(f"\n📱 Configure Flutter app with your MacBook's IP:")
-    print(f"   Example: http://192.168.1.XXX:5000")
+    print(f"   Example: http://192.168.1.XXX:5001")
     print(f"\n💡 To find your MacBook IP address:")
     print(f"   macOS: System Settings → Network → Wi-Fi → Details")
     print(f"   or run: ifconfig | grep 'inet ' | grep -v 127.0.0.1")
@@ -101,4 +101,4 @@ if __name__ == '__main__':
     print("=" * 60 + "\n")
 
     # Run server on all interfaces so it's accessible from phone
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
