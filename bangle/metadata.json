@@ -2,7 +2,7 @@
   "id": "pulsewatch",
   "name": "PulseWatch AI",
   "shortName": "PulseWatch",
-  "version": "0.03",
+  "version": "0.04",
   "description": "Continuous heart rate and accelerometer monitoring for cardiovascular research. Records HRV data and transmits to Flutter app via BLE.",
   "tags": "health,heart rate,medical",
   "supports": ["BANGLEJS2"],

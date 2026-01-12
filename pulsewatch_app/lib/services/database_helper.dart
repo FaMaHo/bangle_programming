@@ -19,9 +19,17 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _upgradeDB,
     );
+  }
+
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Add confidence column if it doesn't exist (migration from v1 to v2)
+      await db.execute('ALTER TABLE heart_rate ADD COLUMN confidence INTEGER');
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {

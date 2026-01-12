@@ -26,9 +26,9 @@ function updateSettings(settings) {
 
 function saveData() {
   if (dataBuffer.length === 0) return;
-  
+
   try {
-    var timestamp = Date.now();
+    var timestamp = Math.floor(Date.now());  // Convert to integer (no decimals)
     var filename = "pw" + timestamp + ".csv";
     
     var file = require("Storage").open(filename, "w");
@@ -42,7 +42,7 @@ function saveData() {
     
     totalSaved += dataBuffer.length;
     dataBuffer = [];
-    lastSaveTime = Date.now();
+    lastSaveTime = Math.floor(Date.now());  // Convert to integer (no decimals)
     
     // Update metadata
     var settings = loadSettings();
@@ -64,7 +64,7 @@ function onHRM(hrm) {
   if (!isRecording) return;
 
   var accel = Bangle.getAccel();
-  var timestamp = Date.now();
+  var timestamp = Math.floor(Date.now());  // Convert to integer (no decimals)
 
   // Prepare data object
   var data = {
@@ -94,7 +94,7 @@ function onHRM(hrm) {
   }
 
   // File saving logic (unchanged)
-  if (Date.now() - lastSaveTime >= CONFIG.saveInterval) {
+  if (Math.floor(Date.now()) - lastSaveTime >= CONFIG.saveInterval) {
     saveData();
   }
 }
@@ -103,8 +103,8 @@ exports.start = function() {
   if (isRecording) return;
 
   isRecording = true;
-  startTime = Date.now();
-  lastSaveTime = Date.now();
+  startTime = Math.floor(Date.now());  // Convert to integer (no decimals)
+  lastSaveTime = Math.floor(Date.now());  // Convert to integer (no decimals)
   dataBuffer = [];
 
   Bangle.on('HRM', onHRM);
