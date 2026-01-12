@@ -226,7 +226,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 20);
+                const SizedBox(height: 20),
 
                 // Action Buttons
                 if (!isConnected) ...[
