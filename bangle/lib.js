@@ -79,11 +79,18 @@ function onHRM(hrm) {
   // Buffer for file saving (unchanged)
   dataBuffer.push(data);
 
-  // 📡 SEND LIVE DATA OVER BLUETOOTH (NEW!)
-  if (NRF && NRF.send) {
-    var line = data.t + "," + data.b + "," + data.c + "," + 
+  // 📡 SEND LIVE DATA OVER BLUETOOTH via Nordic UART Service
+  try {
+    var line = data.t + "," + data.b + "," + data.c + "," +
                data.x + "," + data.y + "," + data.z;
-    NRF.send(line + "\n");
+    Bluetooth.println(line);
+
+    // Debug: Log every 10th reading to console
+    if (dataBuffer.length % 10 === 0) {
+      console.log("BLE TX: BPM=" + data.b + " Records=" + dataBuffer.length);
+    }
+  } catch(e) {
+    console.log("BLE TX Error: " + e);
   }
 
   // File saving logic (unchanged)
@@ -94,14 +101,16 @@ function onHRM(hrm) {
 
 exports.start = function() {
   if (isRecording) return;
-  
+
   isRecording = true;
   startTime = Date.now();
   lastSaveTime = Date.now();
   dataBuffer = [];
-  
+
   Bangle.on('HRM', onHRM);
   Bangle.setHRMPower(1, CONFIG.appName);
+
+  console.log("✅ PulseWatch recording started");
 };
 
 exports.stop = function() {
