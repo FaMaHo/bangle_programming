@@ -36,6 +36,9 @@ dependencies:
   # Icons
   cupertino_icons: ^1.0.8
 
+  # ananymous ID generation
+  crypto: ^3.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

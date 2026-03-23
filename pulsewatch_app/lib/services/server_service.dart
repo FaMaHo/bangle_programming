@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_helper.dart';
@@ -9,158 +8,220 @@ class ServerService {
 
   final DatabaseHelper _db = DatabaseHelper.instance;
 
-  // Get server URL from settings
+  // ─── Settings ────────────────────────────────────────────────────────────
+
   Future<String?> getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('server_url');
   }
 
-  // Save server URL to settings
   Future<void> setServerUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('server_url', url);
   }
 
-  // Export data as CSV format for ML
-  Future<String> exportDataToCSV({DateTime? startDate, DateTime? endDate}) async {
+  /// Returns the anonymous patient ID that was generated at profile setup.
+  /// This is safe to send — it contains no real personal information.
+  Future<String> getPatientId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('patient_id') ?? 'P-UNKNOWN';
+  }
+
+  /// Returns the user's display name (stored locally only, never exported).
+  Future<String> getDisplayName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('profile_display_name') ?? 'Participant';
+  }
+
+  // ─── Export ───────────────────────────────────────────────────────────────
+
+  /// Exports the last 48 hours of data as an anonymized CSV.
+  ///
+  /// Columns: timestamp, hr_bpm, accel_x, accel_y, accel_z
+  /// — device_id and confidence are intentionally excluded.
+  Future<ExportResult> exportAnonymizedCSV() async {
     final db = await _db.database;
 
-    // Default to all data if no date range specified
-    final startTimestamp = startDate?.millisecondsSinceEpoch ?? 0;
-    final endTimestamp = endDate?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch;
+    final cutoff = DateTime.now()
+        .subtract(const Duration(hours: 48))
+        .millisecondsSinceEpoch;
 
-    // Query combined data (JOIN heart rate and accelerometer on timestamp)
-    final result = await db.rawQuery('''
+    final rows = await db.rawQuery('''
       SELECT
         hr.timestamp,
-        hr.bpm,
-        hr.confidence,
-        a.x,
-        a.y,
-        a.z,
-        hr.device_id
+        hr.bpm        AS hr_bpm,
+        a.x           AS accel_x,
+        a.y           AS accel_y,
+        a.z           AS accel_z
       FROM heart_rate hr
-      LEFT JOIN accelerometer a ON hr.timestamp = a.timestamp
-      WHERE hr.timestamp >= ? AND hr.timestamp <= ?
+      LEFT JOIN accelerometer a
+        ON abs(hr.timestamp - a.timestamp) < 500
+      WHERE hr.timestamp >= ?
       ORDER BY hr.timestamp ASC
-    ''', [startTimestamp, endTimestamp]);
+    ''', [cutoff]);
 
-    // Build CSV
-    StringBuffer csv = StringBuffer();
-    csv.writeln('timestamp,bpm,confidence,accel_x,accel_y,accel_z,device_id');
-
-    for (var row in result) {
-      csv.writeln(
-        '${row['timestamp']},'
-        '${row['bpm']},'
-        '${row['confidence'] ?? 0},'
-        '${row['x'] ?? 0},'
-        '${row['y'] ?? 0},'
-        '${row['z'] ?? 0},'
-        '${row['device_id'] ?? 'unknown'}'
+    if (rows.isEmpty) {
+      return ExportResult(
+        csv: '',
+        recordCount: 0,
+        isEmpty: true,
       );
     }
 
-    return csv.toString();
+    final buf = StringBuffer();
+    buf.writeln('timestamp,hr_bpm,accel_x,accel_y,accel_z');
+
+    for (final row in rows) {
+      buf.writeln(
+        '${row['timestamp']},'
+        '${row['hr_bpm']},'
+        '${row['accel_x'] ?? 0},'
+        '${row['accel_y'] ?? 0},'
+        '${row['accel_z'] ?? 0}',
+      );
+    }
+
+    return ExportResult(
+      csv: buf.toString(),
+      recordCount: rows.length,
+      isEmpty: false,
+    );
   }
 
-  // Upload data to server
-  Future<UploadResult> uploadData({DateTime? startDate, DateTime? endDate}) async {
+  // ─── Upload ───────────────────────────────────────────────────────────────
+
+  /// Exports the last 48 hours of anonymized data and uploads it to the server.
+  ///
+  /// Headers sent:
+  ///   X-Patient-ID  — anonymous code (e.g. P-A3F2-1990)
+  ///   X-Session-ID  — auto-generated from upload timestamp
+  ///
+  /// Headers NOT sent:
+  ///   X-Device-ID   — removed to protect device identity
+  Future<UploadResult> uploadData() async {
     try {
       final serverUrl = await getServerUrl();
       if (serverUrl == null || serverUrl.isEmpty) {
         return UploadResult(
           success: false,
-          message: 'Server URL not configured',
+          message: 'Server URL not configured. Please enter it below.',
           recordsUploaded: 0,
         );
       }
 
-      // Generate CSV data
-      final csvData = await exportDataToCSV(startDate: startDate, endDate: endDate);
-      final recordCount = csvData.split('\n').length - 2; // Subtract header and empty line
+      final export = await exportAnonymizedCSV();
 
-      if (recordCount <= 0) {
+      if (export.isEmpty) {
         return UploadResult(
           success: false,
-          message: 'No data available to upload',
+          message: 'No data recorded in the last 48 hours.',
           recordsUploaded: 0,
         );
       }
 
-      // Send to server
+      final patientId = await getPatientId();
+      final sessionId = 'session-${DateTime.now().millisecondsSinceEpoch}';
+
       final response = await http.post(
         Uri.parse('$serverUrl/upload'),
         headers: {
           'Content-Type': 'text/csv',
-          'X-Device-ID': 'flutter-app',
+          'X-Patient-ID': patientId,
+          'X-Session-ID': sessionId,
         },
-        body: csvData,
+        body: export.csv,
       ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         return UploadResult(
           success: true,
-          message: 'Successfully uploaded $recordCount records',
-          recordsUploaded: recordCount,
+          message: 'Uploaded ${export.recordCount} records successfully.',
+          recordsUploaded: export.recordCount,
         );
       } else {
         return UploadResult(
           success: false,
-          message: 'Server error: ${response.statusCode}',
+          message: 'Server returned an error (${response.statusCode}). '
+              'Please check your connection and try again.',
           recordsUploaded: 0,
         );
       }
     } catch (e) {
       return UploadResult(
         success: false,
-        message: 'Upload failed: $e',
+        message: 'Could not reach the server. Make sure you are on the same '
+            'network and the URL is correct.',
         recordsUploaded: 0,
       );
     }
   }
 
-  // Test server connection
+  // ─── Connection test ──────────────────────────────────────────────────────
+
   Future<bool> testConnection() async {
     try {
       final serverUrl = await getServerUrl();
       if (serverUrl == null || serverUrl.isEmpty) return false;
 
-      final response = await http.get(
-        Uri.parse('$serverUrl/health'),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('$serverUrl/health'))
+          .timeout(const Duration(seconds: 5));
 
       return response.statusCode == 200;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  // Get data statistics
+  // ─── Stats ────────────────────────────────────────────────────────────────
+
   Future<DataStats> getDataStats() async {
     final db = await _db.database;
 
-    final hrResult = await db.rawQuery('SELECT COUNT(*) as count, MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM heart_rate');
-    final accelResult = await db.rawQuery('SELECT COUNT(*) as count FROM accelerometer');
+    final cutoff = DateTime.now()
+        .subtract(const Duration(hours: 48))
+        .millisecondsSinceEpoch;
+
+    final hrResult = await db.rawQuery(
+      'SELECT COUNT(*) as count, MIN(timestamp) as min_ts, MAX(timestamp) as max_ts '
+      'FROM heart_rate WHERE timestamp >= ?',
+      [cutoff],
+    );
+    final accelResult = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM accelerometer WHERE timestamp >= ?',
+      [cutoff],
+    );
 
     final hrCount = (hrResult.first['count'] as int?) ?? 0;
     final accelCount = (accelResult.first['count'] as int?) ?? 0;
     final minTs = hrResult.first['min_ts'] as int?;
     final maxTs = hrResult.first['max_ts'] as int?;
 
-    DateTime? firstReading;
-    DateTime? lastReading;
-
-    if (minTs != null) firstReading = DateTime.fromMillisecondsSinceEpoch(minTs);
-    if (maxTs != null) lastReading = DateTime.fromMillisecondsSinceEpoch(maxTs);
-
     return DataStats(
       heartRateRecords: hrCount,
       accelerometerRecords: accelCount,
-      firstReading: firstReading,
-      lastReading: lastReading,
+      firstReading: minTs != null
+          ? DateTime.fromMillisecondsSinceEpoch(minTs)
+          : null,
+      lastReading: maxTs != null
+          ? DateTime.fromMillisecondsSinceEpoch(maxTs)
+          : null,
     );
   }
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+class ExportResult {
+  final String csv;
+  final int recordCount;
+  final bool isEmpty;
+
+  ExportResult({
+    required this.csv,
+    required this.recordCount,
+    required this.isEmpty,
+  });
 }
 
 class UploadResult {
