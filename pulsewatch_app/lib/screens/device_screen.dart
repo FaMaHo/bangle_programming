@@ -327,6 +327,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
                   final filteredDevices = _devices
                       .where((d) => d.device.platformName.isNotEmpty)
                       .toList();
+                  filteredDevices.sort((a, b) {
+                    final aIsBangle = a.device.platformName.toLowerCase().contains('bangle');
+                    final bIsBangle = b.device.platformName.toLowerCase().contains('bangle');
+                    if (aIsBangle && !bIsBangle) return -1;
+                    if (!aIsBangle && bIsBangle) return 1;
+                    return a.device.platformName.compareTo(b.device.platformName);
+                  });
                   final device = filteredDevices[index];
                   final name = device.device.platformName;
                   final isBangle = name.toLowerCase().contains('bangle');
