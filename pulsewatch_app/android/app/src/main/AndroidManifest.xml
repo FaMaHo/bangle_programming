@@ -13,6 +13,8 @@
     <!-- Declare BLE feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <uses-permission android:name="android.permission.CAMERA"/>
+
     <application
         android:label="PulseWatch AI"
         android:name="${applicationName}"

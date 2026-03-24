@@ -39,6 +39,8 @@ dependencies:
   # ananymous ID generation
   crypto: ^3.0.3
 
+  mobile_scanner: ^5.2.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

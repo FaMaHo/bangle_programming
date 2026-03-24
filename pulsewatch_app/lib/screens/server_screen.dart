@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../theme/app_theme.dart';
 import '../services/server_service.dart';
 
@@ -59,11 +60,36 @@ class _ServerScreenState extends State<ServerScreen> {
           content: Text(ok ? '✅ Connected to server' : '❌ Could not connect'),
           backgroundColor: ok ? AppColors.primaryGreen : AppColors.error,
           behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
     }
+  }
+
+  // ─── QR Scanner ───────────────────────────────────────────────────────────
+
+  void _openQRScanner() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => _QRScannerScreen(
+        onScanned: (url) async {
+          _urlController.text = url;
+          await _server.setServerUrl(url);
+          setState(() => _isConnected = false);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('✅ Server URL set from QR code'),
+                backgroundColor: AppColors.primaryGreen,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+            );
+            await _testConnection();
+          }
+        },
+      )),
+    );
   }
 
   // ─── Consent bottom sheet ─────────────────────────────────────────────────
@@ -72,7 +98,7 @@ class _ServerScreenState extends State<ServerScreen> {
     if (_urlController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Please enter the server URL first'),
+          content: const Text('Please enter or scan the server URL first'),
           backgroundColor: AppColors.warning,
           behavior: SnackBarBehavior.floating,
           shape:
@@ -102,7 +128,6 @@ class _ServerScreenState extends State<ServerScreen> {
 
     if (!mounted) return;
 
-    // Refresh stats after upload
     final stats = await _server.getDataStats();
     if (mounted) setState(() => _dataStats = stats);
 
@@ -134,7 +159,6 @@ class _ServerScreenState extends State<ServerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Text('Upload Data',
               style: Theme.of(context).textTheme.headlineLarge),
           const SizedBox(height: 6),
@@ -145,30 +169,22 @@ class _ServerScreenState extends State<ServerScreen> {
 
           const SizedBox(height: 24),
 
-          // Profile card — who is this data for
-          _ProfileCard(
-            displayName: _displayName,
-            patientId: _patientId,
-          ),
-
+          _ProfileCard(displayName: _displayName, patientId: _patientId),
           const SizedBox(height: 16),
-
-          // Data availability card
           _DataCard(stats: _dataStats),
-
           const SizedBox(height: 16),
 
-          // Server URL card
+          // Server card — now with QR scan button
           _ServerCard(
             urlController: _urlController,
             isTesting: _isTesting,
             isConnected: _isConnected,
             onTest: _testConnection,
+            onScanQR: _openQRScanner,
           ),
 
           const Spacer(),
 
-          // Main CTA
           SizedBox(
             width: double.infinity,
             height: 56,
@@ -177,10 +193,7 @@ class _ServerScreenState extends State<ServerScreen> {
               icon: const Icon(Icons.cloud_upload_rounded, size: 20),
               label: const Text(
                 'Export & Upload',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryGreen,
@@ -188,8 +201,7 @@ class _ServerScreenState extends State<ServerScreen> {
                 disabledBackgroundColor: Colors.grey.shade200,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                    borderRadius: BorderRadius.circular(16)),
               ),
             ),
           ),
@@ -215,6 +227,113 @@ class _ServerScreenState extends State<ServerScreen> {
   }
 }
 
+// ─── QR Scanner Screen ────────────────────────────────────────────────────────
+
+class _QRScannerScreen extends StatefulWidget {
+  final void Function(String url) onScanned;
+
+  const _QRScannerScreen({required this.onScanned});
+
+  @override
+  State<_QRScannerScreen> createState() => _QRScannerScreenState();
+}
+
+class _QRScannerScreenState extends State<_QRScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController();
+  bool _scanned = false;
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_scanned) return;
+    final barcode = capture.barcodes.firstOrNull;
+    if (barcode == null) return;
+
+    final value = barcode.rawValue ?? '';
+    // Only accept if it looks like an HTTP URL
+    if (!value.startsWith('http://') && !value.startsWith('https://')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('That QR code does not contain a server URL'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    _scanned = true;
+    _controller.stop();
+    widget.onScanned(value);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text(
+          'Scan server QR code',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: Stack(
+        children: [
+          // Camera feed
+          MobileScanner(
+            controller: _controller,
+            onDetect: _onDetect,
+          ),
+
+          // Overlay with cut-out hint
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 240,
+                  height: 240,
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: AppColors.primaryGreen,
+                      width: 2.5,
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'Point at the QR code on the researcher\'s screen',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ─── Sub-widgets ──────────────────────────────────────────────────────────────
 
 class _ProfileCard extends StatelessWidget {
@@ -233,10 +352,9 @@ class _ProfileCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Row(
@@ -259,10 +377,9 @@ class _ProfileCard extends StatelessWidget {
                 Text(
                   displayName.isEmpty ? 'Participant' : displayName,
                   style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
+                      color: AppColors.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Row(
@@ -273,9 +390,7 @@ class _ProfileCard extends StatelessWidget {
                     Text(
                       'Research ID: $patientId',
                       style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
+                          color: AppColors.textSecondary, fontSize: 12),
                     ),
                   ],
                 ),
@@ -306,10 +421,9 @@ class _DataCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Row(
@@ -323,11 +437,9 @@ class _DataCard extends StatelessWidget {
                   : Colors.grey.withOpacity(0.08),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.favorite_rounded,
-              color: hasData ? AppColors.secondaryCoral : Colors.grey,
-              size: 22,
-            ),
+            child: Icon(Icons.favorite_rounded,
+                color: hasData ? AppColors.secondaryCoral : Colors.grey,
+                size: 22),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -337,10 +449,9 @@ class _DataCard extends StatelessWidget {
                 Text(
                   hasData ? '$count readings ready' : 'No data yet',
                   style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
+                      color: AppColors.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -348,9 +459,7 @@ class _DataCard extends StatelessWidget {
                       ? 'From the last 48 hours · anonymized before upload'
                       : 'Connect your watch and start recording',
                   style: const TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 12,
-                  ),
+                      color: AppColors.textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -366,12 +475,14 @@ class _ServerCard extends StatelessWidget {
   final bool isTesting;
   final bool isConnected;
   final VoidCallback onTest;
+  final VoidCallback onScanQR;
 
   const _ServerCard({
     required this.urlController,
     required this.isTesting,
     required this.isConnected,
     required this.onTest,
+    required this.onScanQR,
   });
 
   @override
@@ -384,10 +495,9 @@ class _ServerCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
         ],
       ),
       child: Column(
@@ -396,14 +506,14 @@ class _ServerCard extends StatelessWidget {
           const Text(
             'Research server',
             style: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+                color: AppColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 12),
           Row(
             children: [
+              // URL text field
               Expanded(
                 child: TextField(
                   controller: urlController,
@@ -438,14 +548,33 @@ class _ServerCard extends StatelessWidget {
                   keyboardType: TextInputType.url,
                 ),
               ),
-              const SizedBox(width: 10),
-              // Test button
+              const SizedBox(width: 8),
+
+              // QR scan button
+              GestureDetector(
+                onTap: onScanQR,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGreen.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.primaryGreen.withOpacity(0.4)),
+                  ),
+                  child: const Icon(Icons.qr_code_scanner_rounded,
+                      color: AppColors.primaryGreen, size: 18),
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // Test connection button
               GestureDetector(
                 onTap: isTesting ? null : onTest,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
+                      horizontal: 12, vertical: 12),
                   decoration: BoxDecoration(
                     color: isConnected
                         ? AppColors.primaryGreen.withOpacity(0.12)
@@ -462,9 +591,8 @@ class _ServerCard extends StatelessWidget {
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.primaryGreen,
-                          ),
+                              strokeWidth: 2,
+                              color: AppColors.primaryGreen),
                         )
                       : Icon(
                           isConnected
@@ -483,17 +611,13 @@ class _ServerCard extends StatelessWidget {
             const SizedBox(height: 8),
             Row(
               children: [
-                Icon(Icons.circle,
-                    color: AppColors.primaryGreen, size: 8),
+                Icon(Icons.circle, color: AppColors.primaryGreen, size: 8),
                 const SizedBox(width: 6),
-                const Text(
-                  'Connected',
-                  style: TextStyle(
-                    color: AppColors.primaryGreen,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                const Text('Connected',
+                    style: TextStyle(
+                        color: AppColors.primaryGreen,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500)),
               ],
             ),
           ],
@@ -528,7 +652,7 @@ class _ConsentSheetState extends State<_ConsentSheet> {
 
   Future<void> _upload() async {
     setState(() => _isUploading = true);
-    Navigator.of(context).pop(); // close sheet first
+    Navigator.of(context).pop();
     await widget.onConfirmed();
   }
 
@@ -549,38 +673,27 @@ class _ConsentSheetState extends State<_ConsentSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Handle bar
           Center(
             child: Container(
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.grey.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(2),
-              ),
+                  color: Colors.grey.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(2)),
             ),
           ),
           const SizedBox(height: 24),
-
-          // Title
-          const Text(
-            'Before you upload',
-            style: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-            ),
-          ),
+          const Text('Before you upload',
+              style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3)),
           const SizedBox(height: 6),
-          const Text(
-            'Please read this — it only takes 10 seconds.',
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-          ),
-
+          const Text('Please read this — it only takes 10 seconds.',
+              style:
+                  TextStyle(color: AppColors.textSecondary, fontSize: 13)),
           const SizedBox(height: 24),
-
-          // What will be sent
           _InfoRow(
             icon: Icons.cloud_upload_outlined,
             iconColor: AppColors.primaryGreen,
@@ -604,10 +717,7 @@ class _ConsentSheetState extends State<_ConsentSheet> {
             body:
                 'No information that could identify your phone or watch is sent.',
           ),
-
           const SizedBox(height: 28),
-
-          // Consent toggle
           GestureDetector(
             onTap: () => setState(() => _consented = !_consented),
             child: Container(
@@ -652,20 +762,16 @@ class _ConsentSheetState extends State<_ConsentSheet> {
                     child: Text(
                       'I understand this is anonymized data shared voluntarily for cardiovascular research.',
                       style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 13,
-                        height: 1.4,
-                      ),
+                          color: AppColors.textPrimary,
+                          fontSize: 13,
+                          height: 1.4),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-
           const SizedBox(height: 20),
-
-          // Upload button
           SizedBox(
             width: double.infinity,
             height: 54,
@@ -677,43 +783,29 @@ class _ConsentSheetState extends State<_ConsentSheet> {
                 disabledBackgroundColor: Colors.grey.shade200,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+                    borderRadius: BorderRadius.circular(14)),
               ),
               child: _isUploading
                   ? const SizedBox(
                       width: 22,
                       height: 22,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: Colors.white,
-                      ),
-                    )
+                          strokeWidth: 2.5, color: Colors.white))
                   : Text(
                       _consented
                           ? 'Upload ${widget.recordCount} readings'
                           : 'Please confirm above to continue',
                       style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                          fontSize: 15, fontWeight: FontWeight.w700)),
             ),
           ),
-
           const SizedBox(height: 10),
-
-          // Cancel
           Center(
             child: TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 14,
-                ),
-              ),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: AppColors.textSecondary, fontSize: 14)),
             ),
           ),
         ],
@@ -754,23 +846,17 @@ class _InfoRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              Text(title,
+                  style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(
-                body,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 12,
-                  height: 1.4,
-                ),
-              ),
+              Text(body,
+                  style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      height: 1.4)),
             ],
           ),
         ),
