@@ -17,7 +17,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
   bool _isScanning = false;
   BluetoothConnectionState _connectionState = BluetoothConnectionState.disconnected;
   TransferProgress? _transferProgress;
-  
+
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<TransferProgress>? _transferSubscription;
@@ -25,13 +25,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
   @override
   void initState() {
     super.initState();
-    
+
     setState(() {
-      _connectionState = _bleService.isConnected 
-          ? BluetoothConnectionState.connected 
+      _connectionState = _bleService.isConnected
+          ? BluetoothConnectionState.connected
           : BluetoothConnectionState.disconnected;
     });
-    
+
     _devicesSubscription = _bleService.devicesStream.listen((devices) {
       if (mounted) {
         setState(() {
@@ -56,7 +56,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
       }
     });
   }
-  
+
   @override
   void dispose() {
     _devicesSubscription?.cancel();
@@ -154,7 +154,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   Color _getDeviceColor() {
     if (!isConnected) return AppColors.textSecondary;
-    
+
     switch (_bleService.currentDeviceType) {
       case DeviceType.bangleJS:
         return AppColors.primaryGreen;
@@ -165,23 +165,46 @@ class _DeviceScreenState extends State<DeviceScreen> {
     }
   }
 
-  bool get isConnected => _connectionState == BluetoothConnectionState.connected;
+  bool get isConnected =>
+      _connectionState == BluetoothConnectionState.connected;
+
+  /// Returns the filtered + sorted device list.
+  /// Bangle.js devices appear first, then alphabetical.
+  /// Computed once per build, not once per list item.
+  List<ScanResult> get _sortedDevices {
+    final filtered = _devices
+        .where((d) => d.device.platformName.isNotEmpty)
+        .toList();
+
+    filtered.sort((a, b) {
+      final aIsBangle =
+          a.device.platformName.toLowerCase().contains('bangle');
+      final bIsBangle =
+          b.device.platformName.toLowerCase().contains('bangle');
+      if (aIsBangle && !bIsBangle) return -1;
+      if (!aIsBangle && bIsBangle) return 1;
+      return a.device.platformName.compareTo(b.device.platformName);
+    });
+
+    return filtered;
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Compute once here — used by both itemCount and itemBuilder
+    final sortedDevices = _sortedDevices;
+
     return Padding(
       padding: const EdgeInsets.all(20.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Text(
             'Device',
             style: Theme.of(context).textTheme.headlineLarge,
           ),
           const SizedBox(height: 24),
 
-          // Connection Status Card
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(24),
@@ -198,15 +221,12 @@ class _DeviceScreenState extends State<DeviceScreen> {
             ),
             child: Column(
               children: [
-                // Icon
                 Icon(
                   isConnected ? _getDeviceIcon() : Icons.watch_outlined,
                   size: 48,
                   color: _getDeviceColor(),
                 ),
                 const SizedBox(height: 16),
-                
-                // Status Text
                 Text(
                   isConnected ? 'Connected' : 'Not Connected',
                   style: const TextStyle(
@@ -217,7 +237,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  isConnected 
+                  isConnected
                       ? _getDeviceTypeLabel()
                       : 'Scan to find your watch',
                   style: const TextStyle(
@@ -225,10 +245,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
                     fontSize: 14,
                   ),
                 ),
-
                 const SizedBox(height: 20),
 
-                // Action Buttons
                 if (!isConnected) ...[
                   SizedBox(
                     width: double.infinity,
@@ -252,18 +270,19 @@ class _DeviceScreenState extends State<DeviceScreen> {
                     ),
                   ),
                 ] else ...[
-                  // Info message - Data streaming automatically
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: AppColors.primaryGreen.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.primaryGreen.withOpacity(0.3)),
+                      border: Border.all(
+                          color: AppColors.primaryGreen.withOpacity(0.3)),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.check_circle_outline, color: AppColors.primaryGreen, size: 20),
+                        Icon(Icons.check_circle_outline,
+                            color: AppColors.primaryGreen, size: 20),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -279,8 +298,6 @@ class _DeviceScreenState extends State<DeviceScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  
-                  // Disconnect Button
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(
@@ -308,8 +325,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Found Devices List
-          if (!isConnected && _devices.isNotEmpty) ...[
+          if (!isConnected && sortedDevices.isNotEmpty) ...[
             const Text(
               'Found Devices',
               style: TextStyle(
@@ -320,27 +336,15 @@ class _DeviceScreenState extends State<DeviceScreen> {
             const SizedBox(height: 8),
             Expanded(
               child: ListView.builder(
-                itemCount: _devices.where((d) => 
-                  d.device.platformName.isNotEmpty
-                ).length,
+                itemCount: sortedDevices.length,
                 itemBuilder: (context, index) {
-                  final filteredDevices = _devices
-                      .where((d) => d.device.platformName.isNotEmpty)
-                      .toList();
-                  filteredDevices.sort((a, b) {
-                    final aIsBangle = a.device.platformName.toLowerCase().contains('bangle');
-                    final bIsBangle = b.device.platformName.toLowerCase().contains('bangle');
-                    if (aIsBangle && !bIsBangle) return -1;
-                    if (!aIsBangle && bIsBangle) return 1;
-                    return a.device.platformName.compareTo(b.device.platformName);
-                  });
-                  final device = filteredDevices[index];
+                  final device = sortedDevices[index];
                   final name = device.device.platformName;
                   final isBangle = name.toLowerCase().contains('bangle');
-                  final isTWatch = name.toLowerCase().contains('t-watch') || 
-                                   name.toLowerCase().contains('twatch');
+                  final isTWatch = name.toLowerCase().contains('t-watch') ||
+                      name.toLowerCase().contains('twatch');
                   final isSupported = isBangle || isTWatch;
-                  
+
                   return Container(
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(16),
@@ -349,8 +353,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
                       borderRadius: BorderRadius.circular(12),
                       border: isSupported
                           ? Border.all(
-                              color: isBangle ? AppColors.primaryGreen : AppColors.secondaryCoral, 
-                              width: 2
+                              color: isBangle
+                                  ? AppColors.primaryGreen
+                                  : AppColors.secondaryCoral,
+                              width: 2,
                             )
                           : null,
                     ),
@@ -358,8 +364,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
                       children: [
                         Icon(
                           isSupported ? Icons.watch : Icons.bluetooth,
-                          color: isSupported 
-                              ? (isBangle ? AppColors.primaryGreen : AppColors.secondaryCoral)
+                          color: isSupported
+                              ? (isBangle
+                                  ? AppColors.primaryGreen
+                                  : AppColors.secondaryCoral)
                               : AppColors.textSecondary,
                         ),
                         const SizedBox(width: 12),
@@ -371,8 +379,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
                                 name,
                                 style: TextStyle(
                                   color: AppColors.textPrimary,
-                                  fontWeight: isSupported 
-                                      ? FontWeight.bold 
+                                  fontWeight: isSupported
+                                      ? FontWeight.bold
                                       : FontWeight.w500,
                                 ),
                               ),
@@ -386,15 +394,21 @@ class _DeviceScreenState extends State<DeviceScreen> {
                               if (isSupported) ...[
                                 const SizedBox(height: 4),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: (isBangle ? AppColors.primaryGreen : AppColors.secondaryCoral).withOpacity(0.1),
+                                    color: (isBangle
+                                            ? AppColors.primaryGreen
+                                            : AppColors.secondaryCoral)
+                                        .withOpacity(0.1),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
                                     isBangle ? 'Bangle.js' : 'T-Watch',
                                     style: TextStyle(
-                                      color: isBangle ? AppColors.primaryGreen : AppColors.secondaryCoral,
+                                      color: isBangle
+                                          ? AppColors.primaryGreen
+                                          : AppColors.secondaryCoral,
                                       fontSize: 10,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -416,10 +430,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
                             ),
                             const SizedBox(height: 4),
                             ElevatedButton(
-                              onPressed: () => _connectToDevice(device.device),
+                              onPressed: () =>
+                                  _connectToDevice(device.device),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: isSupported 
-                                    ? (isBangle ? AppColors.primaryGreen : AppColors.secondaryCoral)
+                                backgroundColor: isSupported
+                                    ? (isBangle
+                                        ? AppColors.primaryGreen
+                                        : AppColors.secondaryCoral)
                                     : AppColors.textSecondary,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(
@@ -443,6 +460,6 @@ class _DeviceScreenState extends State<DeviceScreen> {
       ),
     );
   }
-  
+
   BluetoothDevice? get _connectedDevice => _bleService.connectedDevice;
 }

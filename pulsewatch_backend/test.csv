@@ -1,0 +1,2 @@
+timestamp,bpm,confidence,accel_x,accel_y,accel_z,device_id
+1736697600000,72,85,100,-50,980,test-device
