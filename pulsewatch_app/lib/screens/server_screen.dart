@@ -18,6 +18,7 @@ class _ServerScreenState extends State<ServerScreen> {
   bool _isConnected = false;
   bool _isTesting = false;
   DataStats? _dataStats;
+  DateTime? _lastUploadTime;
   String _displayName = '';
   String _patientId = '';
 
@@ -32,6 +33,7 @@ class _ServerScreenState extends State<ServerScreen> {
     final name = await _server.getDisplayName();
     final id = await _server.getPatientId();
     final stats = await _server.getDataStats();
+    final lastUpload = await _server.getLastUploadTime();
 
     if (mounted) {
       setState(() {
@@ -39,7 +41,11 @@ class _ServerScreenState extends State<ServerScreen> {
         _displayName = name;
         _patientId = id;
         _dataStats = stats;
+        _lastUploadTime = lastUpload;
       });
+      if (url != null && url.isNotEmpty) {
+        _silentConnectionTest(url);
+      }
     }
   }
 
@@ -64,6 +70,12 @@ class _ServerScreenState extends State<ServerScreen> {
         ),
       );
     }
+  }
+
+  // Silently re-checks connection on screen init — no snackbar, no spinner.
+  Future<void> _silentConnectionTest(String url) async {
+    final ok = await _server.testConnection();
+    if (mounted) setState(() => _isConnected = ok);
   }
 
   // ─── QR Scanner ───────────────────────────────────────────────────────────
@@ -129,7 +141,11 @@ class _ServerScreenState extends State<ServerScreen> {
     if (!mounted) return;
 
     final stats = await _server.getDataStats();
-    if (mounted) setState(() => _dataStats = stats);
+    final lastUpload = await _server.getLastUploadTime();
+    if (mounted) setState(() {
+      _dataStats = stats;
+      _lastUploadTime = lastUpload;
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -171,7 +187,7 @@ class _ServerScreenState extends State<ServerScreen> {
 
           _ProfileCard(displayName: _displayName, patientId: _patientId),
           const SizedBox(height: 16),
-          _DataCard(stats: _dataStats),
+          _DataCard(stats: _dataStats, lastUploadTime: _lastUploadTime),
           const SizedBox(height: 16),
 
           // Server card — now with QR scan button
@@ -405,8 +421,18 @@ class _ProfileCard extends StatelessWidget {
 
 class _DataCard extends StatelessWidget {
   final DataStats? stats;
+  final DateTime? lastUploadTime;
 
-  const _DataCard({this.stats});
+  const _DataCard({this.stats, this.lastUploadTime});
+
+  String _lastUploadLabel() {
+    if (lastUploadTime == null) return 'Never uploaded';
+    final diff = DateTime.now().difference(lastUploadTime!);
+    if (diff.inMinutes < 1) return 'Uploaded just now';
+    if (diff.inHours < 1) return 'Uploaded ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'Uploaded ${diff.inHours}h ago';
+    return 'Uploaded ${diff.inDays}d ago';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -460,6 +486,30 @@ class _DataCard extends StatelessWidget {
                       : 'Connect your watch and start recording',
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(
+                      lastUploadTime != null
+                          ? Icons.cloud_done_rounded
+                          : Icons.cloud_off_rounded,
+                      size: 11,
+                      color: lastUploadTime != null
+                          ? AppColors.primaryGreen
+                          : AppColors.textSecondary.withOpacity(0.5),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _lastUploadLabel(),
+                      style: TextStyle(
+                        color: lastUploadTime != null
+                            ? AppColors.primaryGreen
+                            : AppColors.textSecondary.withOpacity(0.5),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

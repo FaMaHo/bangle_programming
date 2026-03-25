@@ -6,6 +6,7 @@ import base64
 from datetime import datetime
 import csv
 from io import StringIO
+import threading
 
 app = Flask(__name__)
 
@@ -27,6 +28,40 @@ def _get_local_ip():
         return ip
     except Exception:
         return '127.0.0.1'
+
+
+# ─── mDNS Service Discovery ──────────────────────────────────────────────────────────────────────
+
+_zeroconf_instance = None
+
+
+def _start_mdns(port=5001):
+    # Announce this server on the local network as _pulsewatch._tcp.local
+    # so the Flutter app can discover the current IP without a QR re-scan.
+    # Only works when running directly (python3 app.py), not inside Docker
+    # with default bridge networking.
+    global _zeroconf_instance
+    try:
+        from zeroconf import ServiceInfo, Zeroconf
+        ip = _get_local_ip()
+        if ip == '127.0.0.1':
+            return  # loopback only - nothing useful to announce
+        _zeroconf_instance = Zeroconf()
+        info = ServiceInfo(
+            '_pulsewatch._tcp.local.',
+            'PulseWatch._pulsewatch._tcp.local.',
+            addresses=[socket.inet_aton(ip)],
+            port=port,
+            properties={'version': b'1'},
+        )
+        _zeroconf_instance.register_service(info)
+        print(f'✅ mDNS registered: pulsewatch @ {ip}:{port}')
+    except Exception as e:
+        print(f'⚠️  mDNS registration skipped: {e}')
+
+
+# Start mDNS in background so it does not delay server startup
+threading.Thread(target=_start_mdns, daemon=True).start()
 
 
 # ─── QR Code ──────────────────────────────────────────────────────────────────
@@ -358,4 +393,4 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)

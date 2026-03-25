@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'database_helper.dart';
@@ -156,6 +157,9 @@ class BleService {
       if (_currentDeviceType == DeviceType.bangleJS) {
         await _autoStartRecording();
       }
+
+      // Remember this device for auto-reconnect on next app open
+      await _saveLastDevice(device);
 
       return true;
       
@@ -536,6 +540,64 @@ class BleService {
       recordsReceived: _totalRecords,
       status: message,
     ));
+  }
+
+  // LAST DEVICE PERSISTENCE ────────────────────────────────────────────────
+
+  Future<void> _saveLastDevice(BluetoothDevice device) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('last_ble_device_id', device.remoteId.toString());
+    await prefs.setString('last_ble_device_name', device.platformName);
+  }
+
+  Future<String?> _getLastDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('last_ble_device_id');
+  }
+
+  // AUTO-RECONNECT ──────────────────────────────────────────────────────────
+
+  /// Called on app resume. Tries to reconnect to the last known device:
+  ///   1. Check if the OS already has it connected (fast path).
+  ///   2. Otherwise scan for up to 8 seconds and connect if found.
+  Future<void> tryAutoReconnect() async {
+    if (isConnected) return;
+
+    final savedId = await _getLastDeviceId();
+    if (savedId == null) return;
+
+    // Fast path: OS-level connection still active
+    for (final device in FlutterBluePlus.connectedDevices) {
+      if (device.remoteId.toString() == savedId) {
+        await connectToDevice(device);
+        return;
+      }
+    }
+
+    // Slow path: scan briefly
+    final completer = Completer<BluetoothDevice?>();
+    Timer(const Duration(seconds: 8), () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+
+    final sub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        if (r.device.remoteId.toString() == savedId) {
+          if (!completer.isCompleted) completer.complete(r.device);
+          break;
+        }
+      }
+    });
+
+    try {
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+      final found = await completer.future;
+      if (found != null) await connectToDevice(found);
+    } catch (_) {
+      // BLE not available or scan failed — ignore silently
+    } finally {
+      sub.cancel();
+    }
   }
 
   // DISCONNECT

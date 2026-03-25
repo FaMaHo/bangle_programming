@@ -6,6 +6,8 @@ import 'screens/insights_screen.dart';
 import 'screens/device_screen.dart';
 import 'screens/server_screen.dart';
 import 'screens/profile_screen.dart';
+import 'services/server_service.dart';
+import 'services/ble_service.dart';
 
 void main() {
   runApp(const PulseWatchApp());
@@ -85,7 +87,8 @@ class MainNavigation extends StatefulWidget {
   State<MainNavigation> createState() => _MainNavigationState();
 }
 
-class _MainNavigationState extends State<MainNavigation> {
+class _MainNavigationState extends State<MainNavigation>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   final List<Widget> _screens = const [
@@ -94,6 +97,64 @@ class _MainNavigationState extends State<MainNavigation> {
     DeviceScreen(),
     ServerScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _triggerAutoUpload();
+      BleService().tryAutoReconnect(); // reconnect watch silently
+    }
+  }
+
+  Future<void> _triggerAutoUpload() async {
+    final server = ServerService.instance;
+    if (!await server.shouldAutoUpload()) return;
+
+    final result = await server.smartUpload();
+    if (!mounted) return;
+
+    if (result.needsRescan) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Server not reachable — please rescan QR code'),
+          backgroundColor: Colors.orange.shade700,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 7),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          action: SnackBarAction(
+            label: 'Rescan',
+            textColor: Colors.white,
+            onPressed: () => setState(() => _currentIndex = 3),
+          ),
+        ),
+      );
+    } else if (result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content:
+              Text('Auto-uploaded ${result.recordsUploaded} readings'),
+          backgroundColor: AppColors.primaryGreen,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

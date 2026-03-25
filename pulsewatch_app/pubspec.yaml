@@ -41,6 +41,9 @@ dependencies:
 
   mobile_scanner: ^5.2.3
 
+  # mDNS service discovery (find server on local network without knowing IP)
+  multicast_dns: ^0.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
