@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'database_helper.dart';
+import 'hrv_feature_extractor.dart';
 
 // Enum to identify device type
 enum DeviceType {
@@ -36,11 +37,15 @@ class BleService {
   final _devicesController = StreamController<List<ScanResult>>.broadcast();
   final _connectionStateController = StreamController<BluetoothConnectionState>.broadcast();
   final _transferProgressController = StreamController<TransferProgress>.broadcast();
+  final _liveBpmController = StreamController<int>.broadcast();
+  final _liveSampleController = StreamController<BpmSample>.broadcast();
 
   // Streams
   Stream<List<ScanResult>> get devicesStream => _devicesController.stream;
   Stream<BluetoothConnectionState> get connectionStateStream => _connectionStateController.stream;
   Stream<TransferProgress> get transferProgressStream => _transferProgressController.stream;
+  Stream<int> get liveBpmStream => _liveBpmController.stream;
+  Stream<BpmSample> get liveSampleStream => _liveSampleController.stream;
 
   // State
   List<ScanResult> _scanResults = [];
@@ -262,6 +267,14 @@ class BleService {
               String? deviceId = _connectedDevice?.remoteId.toString();
               await _db.insertHeartRateWithTimestamp(timestamp, bpm, confidence, deviceId);
               await _db.insertAccelerometerWithTimestamp(timestamp, x, y, z, deviceId);
+              _liveBpmController.add(bpm);
+              _liveSampleController.add(BpmSample(
+                time: DateTime.now(),
+                bpm: bpm.toDouble(),
+                ax: x.toDouble(),
+                ay: y.toDouble(),
+                az: z.toDouble(),
+              ));
 
               // Update live count (only if NOT in file-sync mode)
               if (!_isTransferring) {
@@ -328,6 +341,7 @@ class BleService {
             
             // Save to database with current timestamp
             await _db.insertHeartRate(bpm, deviceId);
+            _liveBpmController.add(bpm);
             _totalRecords++;
             
             // Update progress occasionally
@@ -613,10 +627,20 @@ class BleService {
     }
   }
 
+  Future<void> sendRiskAlarm() async {
+    await _sendCommandBangle(
+      'Bangle.buzz(300,0.4);'
+      'E.showMessage(\"Risk alert\",\"PulseWatch\");'
+      'setTimeout(function(){Bangle.setUI();},4000);'
+    );
+  }
+
   void dispose() {
     _devicesController.close();
     _connectionStateController.close();
     _transferProgressController.close();
+    _liveBpmController.close();
+    _liveSampleController.close();
   }
 }
 

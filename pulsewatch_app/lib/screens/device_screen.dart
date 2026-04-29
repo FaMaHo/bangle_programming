@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../theme/app_theme.dart';
 import '../services/ble_service.dart';
+import '../services/database_helper.dart';
 
 class DeviceScreen extends StatefulWidget {
   const DeviceScreen({super.key});
@@ -21,10 +22,15 @@ class _DeviceScreenState extends State<DeviceScreen> {
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<TransferProgress>? _transferSubscription;
+  int _totalReadings = 0;
+  Timer? _statsTimer;
 
   @override
   void initState() {
     super.initState();
+
+    _loadStats();
+    _statsTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadStats());
 
     setState(() {
       _connectionState = _bleService.isConnected
@@ -62,7 +68,20 @@ class _DeviceScreenState extends State<DeviceScreen> {
     _devicesSubscription?.cancel();
     _connectionSubscription?.cancel();
     _transferSubscription?.cancel();
+    _statsTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadStats() async {
+    final total = await DatabaseHelper.instance.getTotalReadings();
+    if (mounted) setState(() => _totalReadings = total);
+  }
+
+  int _signalScore() {
+    if (_totalReadings == 0) return 0;
+    if (_totalReadings < 100) return 50;
+    if (_totalReadings < 500) return 70;
+    return 85;
   }
 
   Future<void> _startScan() async {
@@ -187,6 +206,93 @@ class _DeviceScreenState extends State<DeviceScreen> {
     });
 
     return filtered;
+  }
+
+
+  Widget _buildSignalScoreCard() {
+    final score = _signalScore();
+    final Color scoreColor = score >= 80
+        ? AppColors.primaryGreen
+        : score >= 50
+            ? AppColors.warning
+            : AppColors.textSecondary;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: scoreColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.bar_chart_rounded, color: scoreColor, size: 22),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Signal Score',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  score == 0
+                      ? 'No data yet'
+                      : score >= 80
+                          ? 'Good'
+                          : score >= 50
+                              ? 'Fair'
+                              : 'Low',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  '$_totalReadings readings collected',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: scoreColor.withOpacity(score == 0 ? 0.06 : 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                '$score',
+                style: TextStyle(
+                  color: score == 0 ? AppColors.textSecondary : scoreColor,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -323,6 +429,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+
+          // Signal Score Card
+          _buildSignalScoreCard(),
           const SizedBox(height: 16),
 
           if (!isConnected && sortedDevices.isNotEmpty) ...[

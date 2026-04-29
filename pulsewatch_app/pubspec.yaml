@@ -44,6 +44,12 @@ dependencies:
   # mDNS service discovery (find server on local network without knowing IP)
   multicast_dns: ^0.3.2
 
+  # On-device ONNX inference
+  onnxruntime: ^1.4.1
+
+  # Local notifications for patient alerts
+  flutter_local_notifications: ^18.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -51,3 +57,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/models/model.onnx
+    - assets/models/feature_names.json

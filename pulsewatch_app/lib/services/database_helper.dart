@@ -276,6 +276,44 @@ class DatabaseHelper {
     };
   }
 
+
+  Future<List<int>> getNocturnalHR() async {
+    final db = await database;
+    final now = DateTime.now();
+    final DateTime windowStart;
+    final DateTime windowEnd;
+    if (now.hour < 6) {
+      final yesterday = now.subtract(const Duration(days: 1));
+      windowStart = DateTime(yesterday.year, yesterday.month, yesterday.day);
+      windowEnd   = DateTime(yesterday.year, yesterday.month, yesterday.day, 6);
+    } else {
+      windowStart = DateTime(now.year, now.month, now.day);
+      windowEnd   = DateTime(now.year, now.month, now.day, 6);
+    }
+    final result = await db.query(
+      'heart_rate',
+      columns: ['bpm'],
+      where: 'timestamp >= ? AND timestamp < ?',
+      whereArgs: [windowStart.millisecondsSinceEpoch, windowEnd.millisecondsSinceEpoch],
+      orderBy: 'timestamp ASC',
+    );
+    return result.map((r) => r['bpm'] as int).toList();
+  }
+
+  Future<List<double>> getHourlyMeanHR(int hours) async {
+    final db = await database;
+    final cutoff = DateTime.now()
+        .subtract(Duration(hours: hours))
+        .millisecondsSinceEpoch;
+    final result = await db.rawQuery(
+      'SELECT (timestamp / 3600000) AS hour_bucket, AVG(bpm) AS mean_bpm '
+      'FROM heart_rate WHERE timestamp >= ? '
+      'GROUP BY hour_bucket ORDER BY hour_bucket ASC',
+      [cutoff],
+    );
+    return result.map((r) => (r['mean_bpm'] as num).toDouble()).toList();
+  }
+
   Future<void> close() async {
     final db = await database;
     await db.close();

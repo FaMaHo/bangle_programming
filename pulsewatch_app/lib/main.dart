@@ -8,12 +8,16 @@ import 'screens/server_screen.dart';
 import 'screens/profile_screen.dart';
 import 'services/server_service.dart';
 import 'services/ble_service.dart';
+import 'services/inference_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await InferenceService.initialize();
   runApp(const PulseWatchApp());
 }
 
-class PulseWatchApp extends StatelessWidget {
+
+class PulseWatchApp extends StatelessWidget { 
   const PulseWatchApp({super.key});
 
   @override
