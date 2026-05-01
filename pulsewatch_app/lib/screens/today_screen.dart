@@ -118,7 +118,7 @@ class _TodayScreenState extends State<TodayScreen>
       if (!mounted) return;
       setState(() => _riskScore = score);
       await NotificationService.sendRiskAlert(score);
-      if (score > 0.75) await _bleService.sendRiskAlarm();
+      if (score > 0.93) await _bleService.sendRiskAlarm();
     } finally {
       _evaluating = false;
     }
@@ -195,7 +195,6 @@ class _TodayScreenState extends State<TodayScreen>
 
   @override
   Widget build(BuildContext context) {
-    final bool hasLive = _isConnected && _liveBpm > 0;
     final bool hasRisk = _riskScore >= 0;
     final bool hasData = _totalReadings > 0 || _avgHR > 0;
     final int bufferCount = _bpmBuffer.length;
@@ -215,10 +214,8 @@ class _TodayScreenState extends State<TodayScreen>
           const SizedBox(height: 16),
 
           // ── LIVE HEARTBEAT CARD ──────────────────────────────────────────
-          if (hasLive) ...[
-            _buildLiveHRCard(),
-            const SizedBox(height: 16),
-          ],
+          _buildLiveHRCard(),
+          const SizedBox(height: 16),
 
           // ── HR SUMMARY ───────────────────────────────────────────────────
           if (hasData) _buildHRSummaryCard(),

@@ -36,10 +36,10 @@ class NotificationService {
   }
 
   static Future<void> sendRiskAlert(double score) async {
-    if (score <= 0.5) return;
+    if (score <= 0.87) return;
 
     final now = DateTime.now();
-    final isHigh = score > 0.75;
+    final isHigh = score > 0.93;
 
     if (isHigh) {
       if (_lastHighAlert != null && now.difference(_lastHighAlert!) < _cooldown) return;

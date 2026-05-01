@@ -106,6 +106,8 @@ class _MainNavigationState extends State<MainNavigation>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Also try on first load, not only on resume
+    WidgetsBinding.instance.addPostFrameCallback((_) => _triggerAutoUpload());
   }
 
   @override
@@ -132,17 +134,12 @@ class _MainNavigationState extends State<MainNavigation>
     if (result.needsRescan) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Server not reachable — please rescan QR code'),
+          content: const Text('Could not reach research server — check connection'),
           backgroundColor: Colors.orange.shade700,
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 7),
+          duration: const Duration(seconds: 5),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          action: SnackBarAction(
-            label: 'Rescan',
-            textColor: Colors.white,
-            onPressed: () => setState(() => _currentIndex = 3),
-          ),
         ),
       );
     } else if (result.success) {
