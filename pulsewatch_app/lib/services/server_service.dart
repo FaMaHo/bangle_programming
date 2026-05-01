@@ -12,11 +12,17 @@ class ServerService {
 
   static const _autoUploadIntervalHours = 6;
 
+  // Update this URL after running Cloudflare Tunnel on the research server.
+  // Run: cloudflared tunnel --url http://localhost:5001
+  // Then paste the generated https://....cfargotunnel.com URL here.
+  static const _defaultServerUrl = 'https://YOUR_TUNNEL.cfargotunnel.com';
+
   // ─── Settings ────────────────────────────────────────────────────────────
 
   Future<String?> getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('server_url');
+    final stored = prefs.getString('server_url');
+    return (stored != null && stored.isNotEmpty) ? stored : _defaultServerUrl;
   }
 
   Future<void> setServerUrl(String url) async {
@@ -60,10 +66,10 @@ class ServerService {
     if (serverUrl == null || serverUrl.isEmpty) return false;
 
     final lastUpload = await getLastUploadTime();
-    if (lastUpload == null) return false; // first upload must be manual
-
-    final hoursSinceLast = DateTime.now().difference(lastUpload).inHours;
-    if (hoursSinceLast < _autoUploadIntervalHours) return false;
+    if (lastUpload != null) {
+      final hoursSinceLast = DateTime.now().difference(lastUpload).inHours;
+      if (hoursSinceLast < _autoUploadIntervalHours) return false;
+    }
 
     final stats = await getDataStats();
     return stats.heartRateRecords > 0;
@@ -228,6 +234,7 @@ class ServerService {
               'Content-Type': 'text/csv',
               'X-Patient-ID': patientId,
               'X-Session-ID': sessionId,
+              'X-Device-ID': 'flutter-app',
             },
             body: export.csv,
           )
