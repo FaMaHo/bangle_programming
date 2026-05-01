@@ -12,10 +12,9 @@ class ServerService {
 
   static const _autoUploadIntervalHours = 6;
 
-  // Update this URL after running Cloudflare Tunnel on the research server.
-  // Run: cloudflared tunnel --url http://localhost:5001
-  // Then paste the generated https://....cfargotunnel.com URL here.
-  static const _defaultServerUrl = 'https://YOUR_TUNNEL.cfargotunnel.com';
+  // Update this U// Tailscale permanent IP — works from China and Romania.
+  // No tunnel or QR code needed. Just make sure Tailscale is running on both devices.
+  static const _defaultServerUrl = 'http://100.67.217.9:5001';
 
   // ─── Settings ────────────────────────────────────────────────────────────
 
