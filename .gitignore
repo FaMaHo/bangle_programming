@@ -88,6 +88,12 @@ Desktop.ini
 /build/
 /coverage/
 
+# Flutter/Xcode duplicate-generated files (macOS "keep both" duplicates,
+# e.g. from re-extracting a zip over an existing checkout)
+**/.flutter-plugins-dependencies*
+**/flutter_export_environment*.sh
+flutter_*.log
+
 # Android
 /android/app/debug
 /android/app/profile
