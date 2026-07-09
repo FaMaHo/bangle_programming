@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -30,6 +30,11 @@ class DatabaseHelper {
       // Add confidence column if it doesn't exist (migration from v1 to v2)
       await db.execute('ALTER TABLE heart_rate ADD COLUMN confidence INTEGER');
     }
+    if (oldVersion < 3) {
+      await db.execute(
+        'ALTER TABLE heart_rate ADD COLUMN rr_interval_ms INTEGER'
+      );
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -39,6 +44,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp INTEGER NOT NULL,
         bpm INTEGER NOT NULL,
+        rr_interval_ms INTEGER,
         confidence INTEGER,
         device_id TEXT
       )
@@ -83,11 +89,12 @@ class DatabaseHelper {
   }
 
   // Insert heart rate with specific timestamp and confidence (for CSV data from watch)
-  Future<int> insertHeartRateWithTimestamp(int timestamp, int bpm, int confidence, String? deviceId) async {
+  Future<int> insertHeartRateWithTimestamp(int timestamp, int bpm, int rrIntervalMs, int confidence, String? deviceId) async {
     final db = await database;
     return await db.insert('heart_rate', {
       'timestamp': timestamp,
       'bpm': bpm,
+      'rr_interval_ms': rrIntervalMs,
       'confidence': confidence,
       'device_id': deviceId,
     });
@@ -148,6 +155,23 @@ class DatabaseHelper {
     ''', [startOfDay]);
 
     return result.first;
+  }
+
+  // Get last N HR+accel rows joined, oldest-first, for inference
+  Future<List<Map<String, dynamic>>> getRecentHRWithAccel(int limit) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT h.timestamp, h.bpm,
+             COALESCE(a.x, 0) AS x,
+             COALESCE(a.y, 0) AS y,
+             COALESCE(a.z, 0) AS z
+      FROM heart_rate h
+      LEFT JOIN accelerometer a
+        ON abs(h.timestamp - a.timestamp) < 500
+      ORDER BY h.timestamp DESC
+      LIMIT ?
+    ''', [limit]);
+    return rows.reversed.toList();
   }
 
   // Get last N heart rate readings

@@ -34,7 +34,7 @@ class _TodayScreenState extends State<TodayScreen>
   final List<BpmSample> _bpmBuffer = [];
   bool _evaluating = false;
   static const _windowDuration = Duration(minutes: 5);
-  static const _minSamplesForRisk = 60;
+  static const _minSamplesForRisk = 300;
   static const _evalCooldown = Duration(minutes: 2);
 
   late AnimationController _heartAnimController;
@@ -106,7 +106,20 @@ class _TodayScreenState extends State<TodayScreen>
     _evaluating = true;
     _lastEvalTime = DateTime.now();
     try {
-      final features = HrvFeatureExtractor.compute(List.from(_bpmBuffer));
+      // Use live buffer if full; otherwise fall back to last 300 DB records.
+      List<BpmSample> window = List.from(_bpmBuffer);
+      if (window.length < _minSamplesForRisk) {
+        final rows = await _db.getRecentHRWithAccel(_minSamplesForRisk);
+        if (rows.length < HrvFeatureExtractor.minSamples) return;
+        window = rows.map((r) => BpmSample(
+          time: DateTime.fromMillisecondsSinceEpoch(r['timestamp'] as int),
+          bpm:  (r['bpm'] as num).toDouble(),
+          ax:   (r['x']   as num).toDouble(),
+          ay:   (r['y']   as num).toDouble(),
+          az:   (r['z']   as num).toDouble(),
+        )).toList();
+      }
+      final features = HrvFeatureExtractor.compute(window);
       // Overlay nocturnal features from DB (replaces training-mean defaults).
       // PPG morphology features remain at training means — hardware calibration needed.
       final nocturnal = await HrvFeatureExtractor.computeNocturnal(_db);
@@ -114,7 +127,8 @@ class _TodayScreenState extends State<TodayScreen>
       features['hrv_circadian_amplitude']  = nocturnal['hrv_circadian_amplitude']!;
       features['sleep_fragmentation_index'] = nocturnal['sleep_fragmentation_index']!;
       final score = await InferenceService.getRiskScore(features);
-      print('[InferenceService] risk=${score.toStringAsFixed(3)}  buffer=${_bpmBuffer.length}');
+      final src = _bpmBuffer.length >= _minSamplesForRisk ? 'live' : 'db';
+      print('[InferenceService] risk=${score.toStringAsFixed(3)}  source=$src  samples=${window.length}');
       if (!mounted) return;
       setState(() => _riskScore = score);
       await NotificationService.sendRiskAlert(score);
@@ -143,6 +157,10 @@ class _TodayScreenState extends State<TodayScreen>
         _avgHR = (stats['avgHR'] as num?)?.round() ?? 0;
         _totalReadings = total;
       });
+      // Score from stored data as soon as app opens, if no live score yet.
+      if (_riskScore < 0 && total >= HrvFeatureExtractor.minSamples && !_evaluating) {
+        _evaluateRisk();
+      }
     }
   }
 
@@ -276,7 +294,7 @@ class _TodayScreenState extends State<TodayScreen>
           ),
           const SizedBox(height: 8),
           const Text(
-            'Connect your watch to start monitoring.\nA risk score appears after 60 readings.',
+            'Connect your watch to start monitoring.\nA risk score appears after 5 minutes of data.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
           ),

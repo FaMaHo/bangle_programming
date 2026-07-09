@@ -51,6 +51,7 @@ class _DebugScreenState extends State<DebugScreen> {
         await _db.insertHeartRateWithTimestamp(
           now + (i * 1000),
           70 + i,
+          0,
           90 + i,
           'TEST_DEVICE',
         );

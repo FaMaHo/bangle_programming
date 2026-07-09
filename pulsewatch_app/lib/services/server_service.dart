@@ -157,7 +157,7 @@ class ServerService {
   // ─── Export ───────────────────────────────────────────────────────────────
 
   /// Exports the last 48 hours of data as an anonymized CSV.
-  /// Columns: timestamp, hr_bpm, accel_x, accel_y, accel_z
+  /// Columns: timestamp, hr_bpm, rr_intervals_ms, accel_x, accel_y, accel_z
   Future<ExportResult> exportAnonymizedCSV() async {
     final db = await _db.database;
 
@@ -169,6 +169,7 @@ class ServerService {
       SELECT
         hr.timestamp,
         hr.bpm        AS hr_bpm,
+        COALESCE(hr.rr_interval_ms, 0) AS rr_intervals_ms,
         a.x           AS accel_x,
         a.y           AS accel_y,
         a.z           AS accel_z
@@ -184,11 +185,12 @@ class ServerService {
     }
 
     final buf = StringBuffer();
-    buf.writeln('timestamp,hr_bpm,accel_x,accel_y,accel_z');
+    buf.writeln('timestamp,hr_bpm,rr_intervals_ms,accel_x,accel_y,accel_z');
     for (final row in rows) {
       buf.writeln(
         '${row['timestamp']},'
         '${row['hr_bpm']},'
+        '${row['rr_intervals_ms']},'
         '${row['accel_x'] ?? 0},'
         '${row['accel_y'] ?? 0},'
         '${row['accel_z'] ?? 0}',
