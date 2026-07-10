@@ -17,6 +17,9 @@ dependencies:
   # Local Database
   sqflite: ^2.4.1
   path: ^1.9.0
+
+  # Secure token storage (Keychain / EncryptedSharedPreferences)
+  flutter_secure_storage: ^9.2.2
   
   # State Management
   provider: ^6.1.2

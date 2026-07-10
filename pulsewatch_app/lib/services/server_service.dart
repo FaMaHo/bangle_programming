@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_service.dart';
 import 'database_helper.dart';
 
 class ServerService {
@@ -31,8 +32,7 @@ class ServerService {
   }
 
   Future<String> getPatientId() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('patient_id') ?? 'P-UNKNOWN';
+    return await AuthService.instance.getPatientId() ?? 'P-UNKNOWN';
   }
 
   Future<String> getDisplayName() async {
@@ -226,21 +226,33 @@ class ServerService {
         );
       }
 
-      final patientId = await getPatientId();
       final sessionId = 'session-${DateTime.now().millisecondsSinceEpoch}';
 
-      final response = await http
-          .post(
-            Uri.parse('$serverUrl/upload'),
-            headers: {
-              'Content-Type': 'text/csv',
-              'X-Patient-ID': patientId,
-              'X-Session-ID': sessionId,
-              'X-Device-ID': 'flutter-app',
-            },
-            body: export.csv,
-          )
-          .timeout(const Duration(seconds: 30));
+      Future<http.Response> doUpload() async {
+        final authHeader = await AuthService.instance.authHeader();
+        return http
+            .post(
+              Uri.parse('$serverUrl/upload'),
+              headers: {
+                'Content-Type': 'text/csv',
+                'X-Session-ID': sessionId,
+                'X-Device-ID': 'flutter-app',
+                ...authHeader,
+              },
+              body: export.csv,
+            )
+            .timeout(const Duration(seconds: 30));
+      }
+
+      var response = await doUpload();
+
+      // Access token expired mid-session — refresh once and retry.
+      if (response.statusCode == 401) {
+        final refreshed = await AuthService.instance.refreshAccessToken();
+        if (refreshed != null) {
+          response = await doUpload();
+        }
+      }
 
       if (response.statusCode == 200) {
         await _saveLastUploadTime();
@@ -248,6 +260,13 @@ class ServerService {
           success: true,
           message: 'Uploaded ${export.recordCount} records successfully.',
           recordsUploaded: export.recordCount,
+        );
+      } else if (response.statusCode == 401) {
+        return UploadResult(
+          success: false,
+          message: 'Your session has expired. Please log in again.',
+          recordsUploaded: 0,
+          needsLogin: true,
         );
       } else {
         return UploadResult(
@@ -339,12 +358,14 @@ class UploadResult {
   final String message;
   final int recordsUploaded;
   final bool needsRescan;
+  final bool needsLogin;
 
   UploadResult({
     required this.success,
     required this.message,
     required this.recordsUploaded,
     this.needsRescan = false,
+    this.needsLogin = false,
   });
 }
 

@@ -1,5 +1,3 @@
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -55,17 +53,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.dispose();
   }
 
-  /// Generates a stable anonymous ID from name + birth year.
-  /// Format: P-XXXX-YYYY  (4-char hash + birth year)
-  /// The real name is never stored or exported.
-  String _generatePatientId(String name, String birthYear) {
-    final input = '${name.trim().toLowerCase()}$birthYear';
-    final bytes = utf8.encode(input);
-    final digest = sha256.convert(bytes);
-    final shortHash = digest.toString().substring(0, 4).toUpperCase();
-    return 'P-$shortHash-$birthYear';
-  }
-
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedSex.isEmpty) {
@@ -77,13 +64,9 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     setState(() => _isSaving = true);
 
-    final patientId = _generatePatientId(
-      _nameController.text,
-      _birthYearController.text,
-    );
-
+    // patient_id now comes from the server (set during account enrollment/
+    // login) — this screen only collects details for local HRV features.
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('patient_id', patientId);
     await prefs.setString('profile_sex', _selectedSex);
     await prefs.setString('profile_birth_year', _birthYearController.text);
     // We store name locally only so we can greet the user — it is NEVER exported
@@ -170,7 +153,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                           const SizedBox(width: 12),
                           const Expanded(
                             child: Text(
-                              'Your name is never shared. We use a random code like "P-A3F2-1990" to protect your identity.',
+                              'Your name is never shared. Your account uses a random research code, not your real name, to protect your identity.',
                               style: TextStyle(
                                 color: AppColors.textPrimary,
                                 fontSize: 12,

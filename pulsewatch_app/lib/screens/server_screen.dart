@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../main.dart';
 import '../theme/app_theme.dart';
+import '../services/auth_service.dart';
 import '../services/server_service.dart';
 
 class ServerScreen extends StatefulWidget {
@@ -76,6 +78,40 @@ class _ServerScreenState extends State<ServerScreen> {
   Future<void> _silentConnectionTest(String url) async {
     final ok = await _server.testConnection();
     if (mounted) setState(() => _isConnected = ok);
+  }
+
+  // ─── Logout ───────────────────────────────────────────────────────────────
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'You\'ll need your username and password (or a new enrollment code) to log back in.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Log out', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await AuthService.instance.logout();
+    if (!mounted) return;
+
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const PulseWatchApp()),
+      (route) => false,
+    );
   }
 
   // ─── QR Scanner ───────────────────────────────────────────────────────────
@@ -185,7 +221,11 @@ class _ServerScreenState extends State<ServerScreen> {
 
           const SizedBox(height: 24),
 
-          _ProfileCard(displayName: _displayName, patientId: _patientId),
+          _ProfileCard(
+            displayName: _displayName,
+            patientId: _patientId,
+            onLogout: _logout,
+          ),
           const SizedBox(height: 16),
           _DataCard(stats: _dataStats, lastUploadTime: _lastUploadTime),
           const SizedBox(height: 16),
@@ -355,8 +395,13 @@ class _QRScannerScreenState extends State<_QRScannerScreen> {
 class _ProfileCard extends StatelessWidget {
   final String displayName;
   final String patientId;
+  final VoidCallback onLogout;
 
-  const _ProfileCard({required this.displayName, required this.patientId});
+  const _ProfileCard({
+    required this.displayName,
+    required this.patientId,
+    required this.onLogout,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -412,6 +457,11 @@ class _ProfileCard extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded, color: AppColors.textSecondary, size: 20),
+            tooltip: 'Log out',
+            onPressed: onLogout,
           ),
         ],
       ),

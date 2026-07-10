@@ -6,6 +6,8 @@ import 'screens/insights_screen.dart';
 import 'screens/device_screen.dart';
 import 'screens/server_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/enroll_screen.dart';
+import 'services/auth_service.dart';
 import 'services/server_service.dart';
 import 'services/ble_service.dart';
 import 'services/inference_service.dart';
@@ -31,8 +33,8 @@ class PulseWatchApp extends StatelessWidget {
   }
 }
 
-/// Checks whether the user has completed profile setup.
-/// Shows [ProfileScreen] on first launch, then [MainNavigation] afterward.
+/// Routes between account setup, profile setup, and the main app based on
+/// whether the device has a logged-in account and a completed profile.
 class _AppEntry extends StatefulWidget {
   const _AppEntry();
 
@@ -42,23 +44,30 @@ class _AppEntry extends StatefulWidget {
 
 class _AppEntryState extends State<_AppEntry> {
   bool _isLoading = true;
+  bool _isLoggedIn = false;
   bool _profileComplete = false;
 
   @override
   void initState() {
     super.initState();
-    _checkProfile();
+    _checkState();
   }
 
-  Future<void> _checkProfile() async {
+  Future<void> _checkState() async {
+    final loggedIn = await AuthService.instance.isLoggedIn();
     final prefs = await SharedPreferences.getInstance();
-    final complete = prefs.getBool('profile_complete') ?? false;
+    final profileComplete = prefs.getBool('profile_complete') ?? false;
     if (mounted) {
       setState(() {
-        _profileComplete = complete;
+        _isLoggedIn = loggedIn;
+        _profileComplete = profileComplete;
         _isLoading = false;
       });
     }
+  }
+
+  void _onLoggedIn() {
+    setState(() => _isLoggedIn = true);
   }
 
   void _onProfileComplete() {
@@ -74,6 +83,10 @@ class _AppEntryState extends State<_AppEntry> {
           child: CircularProgressIndicator(color: AppColors.primaryGreen),
         ),
       );
+    }
+
+    if (!_isLoggedIn) {
+      return EnrollScreen(onEnrolled: _onLoggedIn);
     }
 
     if (!_profileComplete) {
@@ -131,7 +144,14 @@ class _MainNavigationState extends State<MainNavigation>
     final result = await server.smartUpload();
     if (!mounted) return;
 
-    if (result.needsRescan) {
+    if (result.needsLogin) {
+      // Refresh token is dead — drop back to the login/enrollment flow.
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const _AppEntry()),
+        (route) => false,
+      );
+    } else if (result.needsRescan) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('Could not reach research server — check connection'),
