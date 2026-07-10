@@ -1,10 +1,5 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import '../main.dart';
 import '../theme/app_theme.dart';
-import '../services/auth_service.dart';
-import '../services/biometric_lock_service.dart';
 import '../services/server_service.dart';
 
 class ServerScreen extends StatefulWidget {
@@ -24,8 +19,6 @@ class _ServerScreenState extends State<ServerScreen> {
   DateTime? _lastUploadTime;
   String _displayName = '';
   String _patientId = '';
-  bool _biometricSupported = false;
-  bool _biometricEnabled = true;
 
   @override
   void initState() {
@@ -39,8 +32,6 @@ class _ServerScreenState extends State<ServerScreen> {
     final id = await _server.getPatientId();
     final stats = await _server.getDataStats();
     final lastUpload = await _server.getLastUploadTime();
-    final biometricSupported = await BiometricLockService.instance.isDeviceSupported();
-    final biometricEnabled = await BiometricLockService.instance.isEnabled();
 
     if (mounted) {
       setState(() {
@@ -49,18 +40,11 @@ class _ServerScreenState extends State<ServerScreen> {
         _patientId = id;
         _dataStats = stats;
         _lastUploadTime = lastUpload;
-        _biometricSupported = biometricSupported;
-        _biometricEnabled = biometricEnabled;
       });
       if (url != null && url.isNotEmpty) {
         _silentConnectionTest(url);
       }
     }
-  }
-
-  Future<void> _toggleBiometricLock(bool value) async {
-    await BiometricLockService.instance.setEnabled(value);
-    if (mounted) setState(() => _biometricEnabled = value);
   }
 
   Future<void> _testConnection() async {
@@ -90,66 +74,6 @@ class _ServerScreenState extends State<ServerScreen> {
   Future<void> _silentConnectionTest(String url) async {
     final ok = await _server.testConnection();
     if (mounted) setState(() => _isConnected = ok);
-  }
-
-  // ─── Logout ───────────────────────────────────────────────────────────────
-
-  Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Log out?'),
-        content: const Text(
-          'You\'ll need your username and password (or a new enrollment code) to log back in.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Log out', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    await AuthService.instance.logout();
-    if (!mounted) return;
-
-    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const PulseWatchApp()),
-      (route) => false,
-    );
-  }
-
-  // ─── QR Scanner ───────────────────────────────────────────────────────────
-
-  void _openQRScanner() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => _QRScannerScreen(
-        onScanned: (url) async {
-          _urlController.text = url;
-          await _server.setServerUrl(url);
-          setState(() => _isConnected = false);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('✅ Server URL set from QR code'),
-                backgroundColor: AppColors.primaryGreen,
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-            );
-            await _testConnection();
-          }
-        },
-      )),
-    );
   }
 
   // ─── Consent bottom sheet ─────────────────────────────────────────────────
@@ -233,26 +157,14 @@ class _ServerScreenState extends State<ServerScreen> {
 
           const SizedBox(height: 24),
 
-          _ProfileCard(
-            displayName: _displayName,
-            patientId: _patientId,
-            onLogout: _logout,
-          ),
-          if (_biometricSupported) ...[
-            const SizedBox(height: 12),
-            _AppLockToggle(enabled: _biometricEnabled, onChanged: _toggleBiometricLock),
-          ],
-          const SizedBox(height: 16),
           _DataCard(stats: _dataStats, lastUploadTime: _lastUploadTime),
           const SizedBox(height: 16),
 
-          // Server card — now with QR scan button
           _ServerCard(
             urlController: _urlController,
             isTesting: _isTesting,
             isConnected: _isConnected,
             onTest: _testConnection,
-            onScanQR: _openQRScanner,
           ),
 
           const Spacer(),
@@ -299,234 +211,7 @@ class _ServerScreenState extends State<ServerScreen> {
   }
 }
 
-class _AppLockToggle extends StatelessWidget {
-  final bool enabled;
-  final ValueChanged<bool> onChanged;
-
-  const _AppLockToggle({required this.enabled, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 4))
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.fingerprint_rounded, color: AppColors.primaryGreen, size: 22),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Text(
-              'App lock',
-              style: TextStyle(
-                  color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-          ),
-          Switch(
-            value: enabled,
-            onChanged: onChanged,
-            activeColor: AppColors.primaryGreen,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── QR Scanner Screen ────────────────────────────────────────────────────────
-
-class _QRScannerScreen extends StatefulWidget {
-  final void Function(String url) onScanned;
-
-  const _QRScannerScreen({required this.onScanned});
-
-  @override
-  State<_QRScannerScreen> createState() => _QRScannerScreenState();
-}
-
-class _QRScannerScreenState extends State<_QRScannerScreen> {
-  final MobileScannerController _controller = MobileScannerController();
-  bool _scanned = false;
-
-  void _onDetect(BarcodeCapture capture) {
-    if (_scanned) return;
-    final barcode = capture.barcodes.firstOrNull;
-    if (barcode == null) return;
-
-    final value = barcode.rawValue ?? '';
-    // Only accept if it looks like an HTTP URL
-    if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('That QR code does not contain a server URL'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    _scanned = true;
-    _controller.stop();
-    widget.onScanned(value);
-    Navigator.of(context).pop();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text(
-          'Scan server QR code',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.close_rounded),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-      ),
-      body: Stack(
-        children: [
-          // Camera feed
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-          ),
-
-          // Overlay with cut-out hint
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 240,
-                  height: 240,
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: AppColors.primaryGreen,
-                      width: 2.5,
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text(
-                    'Point at the QR code on the researcher\'s screen',
-                    style: TextStyle(color: Colors.white, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Sub-widgets ──────────────────────────────────────────────────────────────
-
-class _ProfileCard extends StatelessWidget {
-  final String displayName;
-  final String patientId;
-  final VoidCallback onLogout;
-
-  const _ProfileCard({
-    required this.displayName,
-    required this.patientId,
-    required this.onLogout,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 4))
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.primaryGreen.withOpacity(0.12),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.person_rounded,
-                color: AppColors.primaryGreen, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  displayName.isEmpty ? 'Participant' : displayName,
-                  style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Icon(Icons.shield_rounded,
-                        color: AppColors.primaryGreen, size: 12),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Research ID: $patientId',
-                      style: const TextStyle(
-                          color: AppColors.textSecondary, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: AppColors.textSecondary, size: 20),
-            tooltip: 'Log out',
-            onPressed: onLogout,
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _DataCard extends StatelessWidget {
   final DataStats? stats;
@@ -634,14 +319,12 @@ class _ServerCard extends StatelessWidget {
   final bool isTesting;
   final bool isConnected;
   final VoidCallback onTest;
-  final VoidCallback onScanQR;
 
   const _ServerCard({
     required this.urlController,
     required this.isTesting,
     required this.isConnected,
     required this.onTest,
-    required this.onScanQR,
   });
 
   @override
@@ -705,24 +388,6 @@ class _ServerCard extends StatelessWidget {
                     ),
                   ),
                   keyboardType: TextInputType.url,
-                ),
-              ),
-              const SizedBox(width: 8),
-
-              // QR scan button
-              GestureDetector(
-                onTap: onScanQR,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryGreen.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: AppColors.primaryGreen.withOpacity(0.4)),
-                  ),
-                  child: const Icon(Icons.qr_code_scanner_rounded,
-                      color: AppColors.primaryGreen, size: 18),
                 ),
               ),
               const SizedBox(width: 8),

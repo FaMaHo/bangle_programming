@@ -17,12 +17,11 @@ class _DeviceScreenState extends State<DeviceScreen> {
   List<ScanResult> _devices = [];
   bool _isScanning = false;
   BluetoothConnectionState _connectionState = BluetoothConnectionState.disconnected;
-  TransferProgress? _transferProgress;
 
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
-  StreamSubscription<TransferProgress>? _transferSubscription;
   int _totalReadings = 0;
+  int _latestConfidence = 0;
   Timer? _statsTimer;
 
   @override
@@ -54,34 +53,25 @@ class _DeviceScreenState extends State<DeviceScreen> {
       }
     });
 
-    _transferSubscription = _bleService.transferProgressStream.listen((progress) {
-      if (mounted) {
-        setState(() {
-          _transferProgress = progress;
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
     _devicesSubscription?.cancel();
     _connectionSubscription?.cancel();
-    _transferSubscription?.cancel();
     _statsTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _loadStats() async {
     final total = await DatabaseHelper.instance.getTotalReadings();
-    if (mounted) setState(() => _totalReadings = total);
-  }
-
-  int _signalScore() {
-    if (_totalReadings == 0) return 0;
-    if (_totalReadings < 100) return 50;
-    if (_totalReadings < 500) return 70;
-    return 85;
+    final confidence = await DatabaseHelper.instance.getLatestConfidence();
+    if (mounted) {
+      setState(() {
+        _totalReadings = total;
+        _latestConfidence = confidence;
+      });
+    }
   }
 
   Future<void> _startScan() async {
@@ -129,24 +119,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
   Future<void> _disconnect() async {
     await _bleService.disconnect();
     if (mounted) {
-      setState(() {
-        _transferProgress = null;
-      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Disconnected')),
       );
     }
-  }
-
-  Future<void> _syncData() async {
-    if (_bleService.isTransferring) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sync already in progress')),
-      );
-      return;
-    }
-
-    await _bleService.syncDataFromWatch();
   }
 
   String _getDeviceTypeLabel() {
@@ -209,13 +185,17 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
 
-  Widget _buildSignalScoreCard() {
-    final score = _signalScore();
-    final Color scoreColor = score >= 80
-        ? AppColors.primaryGreen
-        : score >= 50
-            ? AppColors.warning
-            : AppColors.textSecondary;
+  // Real HRM confidence from the watch — not an arbitrary score derived
+  // from how much data happens to have accumulated.
+  Widget _buildSignalQualityCard() {
+    final hasSignal = _latestConfidence > 0;
+    final Color scoreColor = !hasSignal
+        ? AppColors.textSecondary
+        : _latestConfidence >= 80
+            ? AppColors.primaryGreen
+            : _latestConfidence >= 50
+                ? AppColors.warning
+                : AppColors.error;
 
     return Container(
       width: double.infinity,
@@ -239,7 +219,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
               color: scoreColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(Icons.bar_chart_rounded, color: scoreColor, size: 22),
+            child: Icon(Icons.sensors_rounded, color: scoreColor, size: 22),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -247,21 +227,15 @@ class _DeviceScreenState extends State<DeviceScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Signal Score',
+                  'Signal Quality',
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  score == 0
-                      ? 'No data yet'
-                      : score >= 80
-                          ? 'Good'
-                          : score >= 50
-                              ? 'Fair'
-                              : 'Low',
-                  style: TextStyle(
+                  hasSignal ? 'From the watch\'s HRM sensor' : 'No data yet',
+                  style: const TextStyle(
                     color: AppColors.textPrimary,
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -272,24 +246,25 @@ class _DeviceScreenState extends State<DeviceScreen> {
               ],
             ),
           ),
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: scoreColor.withOpacity(score == 0 ? 0.06 : 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                '$score',
-                style: TextStyle(
-                  color: score == 0 ? AppColors.textSecondary : scoreColor,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+          if (hasSignal)
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: scoreColor.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: Text(
+                  '$_latestConfidence%',
+                  style: TextStyle(
+                    color: scoreColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -431,8 +406,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Signal Score Card
-          _buildSignalScoreCard(),
+          // Signal Quality Card
+          _buildSignalQualityCard(),
           const SizedBox(height: 16),
 
           if (!isConnected && sortedDevices.isNotEmpty) ...[

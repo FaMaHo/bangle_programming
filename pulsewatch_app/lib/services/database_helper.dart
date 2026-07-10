@@ -339,6 +339,36 @@ class DatabaseHelper {
     return result.map((r) => (r['mean_bpm'] as num).toDouble()).toList();
   }
 
+  Future<DateTime?> getLastReadingTime() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT MAX(timestamp) as last FROM heart_rate');
+    final ts = result.first['last'] as int?;
+    return ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
+  }
+
+  // Most recent HRM confidence value (0-100-ish), for showing real signal
+  // quality instead of a made-up score.
+  Future<int> getLatestConfidence() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT confidence FROM heart_rate WHERE confidence IS NOT NULL '
+      'ORDER BY timestamp DESC LIMIT 1',
+    );
+    if (result.isEmpty) return 0;
+    return (result.first['confidence'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<int> getAvgConfidence({required int sinceMillis}) async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT AVG(confidence) as avg FROM heart_rate '
+      'WHERE confidence IS NOT NULL AND timestamp >= ?',
+      [sinceMillis],
+    );
+    final avg = result.first['avg'] as num?;
+    return avg?.round() ?? 0;
+  }
+
   Future<void> close() async {
     final db = await database;
     await db.close();

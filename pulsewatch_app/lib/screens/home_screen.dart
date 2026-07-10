@@ -7,19 +7,28 @@ import '../services/ble_service.dart';
 import '../services/hrv_feature_extractor.dart';
 import '../services/inference_service.dart';
 import '../services/notification_service.dart';
+import '../services/server_service.dart';
+import 'settings_screen.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-class TodayScreen extends StatefulWidget {
-  const TodayScreen({super.key});
+/// Home dashboard — the first thing a user sees. Answers, at a glance:
+/// is the watch connected, how much data have we collected toward the
+/// 48h goal, what's the current reading, and is there anything the user
+/// needs to go do (connect the watch, upload data).
+class HomeScreen extends StatefulWidget {
+  final void Function(int tabIndex) onNavigateToTab;
+
+  const HomeScreen({super.key, required this.onNavigateToTab});
 
   @override
-  State<TodayScreen> createState() => _TodayScreenState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _TodayScreenState extends State<TodayScreen>
+class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   final DatabaseHelper _db = DatabaseHelper.instance;
   final BleService _bleService = BleService();
+  final ServerService _server = ServerService.instance;
 
   int _minHR = 0;
   int _maxHR = 0;
@@ -27,9 +36,14 @@ class _TodayScreenState extends State<TodayScreen>
   int _totalReadings = 0;
   bool _isConnected = false;
   int _liveBpm = 0;
+  int _latestConfidence = 0;
+  int _coverageHours = 0; // distinct hours with data in the last 48h
+  bool _needsUpload = false;
   double _riskScore = -1.0;
   DateTime? _lastEvalTime;
   int _liveRecordsReceived = 0;
+
+  static const _collectionGoalHours = 48;
 
   final List<BpmSample> _bpmBuffer = [];
   bool _evaluating = false;
@@ -62,6 +76,7 @@ class _TodayScreenState extends State<TodayScreen>
     });
 
     NotificationService.initialize();
+    _isConnected = _bleService.isConnected;
     _loadStats();
     _statsTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadStats());
 
@@ -151,12 +166,23 @@ class _TodayScreenState extends State<TodayScreen>
   Future<void> _loadStats() async {
     final stats = await _db.getTodayHRStats();
     final total = await _db.getTotalReadings();
+    final confidence = await _db.getLatestConfidence();
+    final coverage = await _db.getHourlyMeanHR(_collectionGoalHours);
+    final lastReading = await _db.getLastReadingTime();
+    final lastUpload = await _server.getLastUploadTime();
+
+    final needsUpload = lastReading != null &&
+        (lastUpload == null || lastReading.isAfter(lastUpload));
+
     if (mounted) {
       setState(() {
         _minHR = (stats['minHR'] as num?)?.toInt() ?? 0;
         _maxHR = (stats['maxHR'] as num?)?.toInt() ?? 0;
         _avgHR = (stats['avgHR'] as num?)?.round() ?? 0;
         _totalReadings = total;
+        _latestConfidence = confidence;
+        _coverageHours = coverage.length;
+        _needsUpload = needsUpload;
       });
       // Score from stored data as soon as app opens, if no live score yet.
       if (_riskScore < 0 && total >= HrvFeatureExtractor.minSamples && !_evaluating) {
@@ -205,6 +231,12 @@ class _TodayScreenState extends State<TodayScreen>
     return AppColors.error;
   }
 
+  Color _confidenceColor(int confidence) {
+    if (confidence >= 80) return AppColors.primaryGreen;
+    if (confidence >= 50) return AppColors.warning;
+    return AppColors.error;
+  }
+
   String _formatTime(DateTime dt) {
     final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
     final m = dt.minute.toString().padLeft(2, '0');
@@ -223,13 +255,38 @@ class _TodayScreenState extends State<TodayScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Today', style: Theme.of(context).textTheme.headlineLarge),
-          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Home', style: Theme.of(context).textTheme.headlineLarge),
+              IconButton(
+                icon: const Icon(Icons.settings_outlined, color: AppColors.textSecondary),
+                tooltip: 'Settings',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                ),
+              ),
+            ],
+          ),
           Text(_getFormattedDate(), style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 24),
 
+          // ── WATCH STATUS ─────────────────────────────────────────────────
+          _buildWatchStatusCard(),
+          const SizedBox(height: 16),
+
+          // ── UPLOAD NUDGE ─────────────────────────────────────────────────
+          if (_needsUpload) ...[
+            _buildUploadNudgeCard(),
+            const SizedBox(height: 16),
+          ],
+
           // ── HERO RISK CARD ───────────────────────────────────────────────
           _buildRiskHeroCard(hasRisk, bufferCount),
+          const SizedBox(height: 16),
+
+          // ── 48H COLLECTION PROGRESS ──────────────────────────────────────
+          _buildCollectionProgressCard(),
           const SizedBox(height: 16),
 
           // ── LIVE HEARTBEAT CARD ──────────────────────────────────────────
@@ -238,6 +295,155 @@ class _TodayScreenState extends State<TodayScreen>
 
           // ── HR SUMMARY ───────────────────────────────────────────────────
           if (hasData) _buildHRSummaryCard(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWatchStatusCard() {
+    return GestureDetector(
+      onTap: _isConnected ? null : () => widget.onNavigateToTab(2),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: _isConnected
+              ? AppColors.primaryGreen.withOpacity(0.08)
+              : AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isConnected
+                ? AppColors.primaryGreen.withOpacity(0.25)
+                : AppColors.warning.withOpacity(0.4),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _isConnected ? Icons.watch : Icons.watch_off_outlined,
+              color: _isConnected ? AppColors.primaryGreen : AppColors.warning,
+              size: 22,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _isConnected ? 'Watch connected' : 'Watch not connected',
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (!_isConnected)
+                    const Text(
+                      'Tap to connect your watch',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                    ),
+                ],
+              ),
+            ),
+            if (!_isConnected)
+              const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUploadNudgeCard() {
+    return GestureDetector(
+      onTap: () => widget.onNavigateToTab(3),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppColors.secondaryCoral.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.secondaryCoral.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_upload_outlined, color: AppColors.secondaryCoral, size: 22),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Text(
+                'You have data that hasn\'t been sent to the research server yet',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.3,
+                ),
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCollectionProgressCard() {
+    final progress = (_coverageHours / _collectionGoalHours).clamp(0.0, 1.0);
+    final isComplete = _coverageHours >= _collectionGoalHours;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Data collected',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
+              ),
+              if (isComplete)
+                Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded, color: AppColors.primaryGreen, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Goal reached',
+                      style: TextStyle(color: AppColors.primaryGreen, fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 10,
+              backgroundColor: AppColors.background,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                isComplete ? AppColors.primaryGreen : AppColors.secondaryCoral,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$_coverageHours of $_collectionGoalHours hours',
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );
@@ -539,94 +745,116 @@ class _TodayScreenState extends State<TodayScreen>
               : AppColors.textSecondary.withOpacity(0.12),
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ScaleTransition(
-            scale: _heartScaleAnim,
-            child: Icon(
-              hasLiveBpm ? Icons.favorite : Icons.favorite_border,
-              color: heartColor,
-              size: 40,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+          Row(
+            children: [
+              ScaleTransition(
+                scale: _heartScaleAnim,
+                child: Icon(
+                  hasLiveBpm ? Icons.favorite : Icons.favorite_border,
+                  color: heartColor,
+                  size: 40,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      hasLiveBpm ? '$_liveBpm' : '--',
-                      style: TextStyle(
-                        color: heartColor,
-                        fontSize: 40,
-                        fontWeight: FontWeight.bold,
-                        height: 1.0,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          hasLiveBpm ? '$_liveBpm' : '--',
+                          style: TextStyle(
+                            color: heartColor,
+                            fontSize: 40,
+                            fontWeight: FontWeight.bold,
+                            height: 1.0,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            hasLiveBpm ? 'BPM  ·  Live' : 'BPM',
+                            style: TextStyle(
+                              color: heartColor.withOpacity(0.7),
+                              fontSize: 13,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        hasLiveBpm ? 'BPM  ·  Live' : 'BPM',
-                        style: TextStyle(
-                          color: heartColor.withOpacity(0.7),
-                          fontSize: 13,
-                          letterSpacing: 1.2,
+                    const SizedBox(height: 4),
+                    if (hasLiveBpm)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _heartZoneColor(_liveBpm).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          _heartZone(_liveBpm),
+                          style: TextStyle(
+                            color: _heartZoneColor(_liveBpm),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      )
+                    else
+                      Text(
+                        _isConnected ? 'Waiting for data...' : 'Watch not connected',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
                         ),
                       ),
-                    ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                if (hasLiveBpm)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: _heartZoneColor(_liveBpm).withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _heartZone(_liveBpm),
+              ),
+              if (hasLiveBpm) ...[
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Icon(Icons.radio_button_checked,
+                        color: AppColors.primaryGreen, size: 12),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$_liveRecordsReceived',
                       style: TextStyle(
-                        color: _heartZoneColor(_liveBpm),
-                        fontSize: 12,
+                        color: AppColors.primaryGreen,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  )
-                else
-                  Text(
-                    _isConnected ? 'Waiting for data...' : 'Watch not connected',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
+                    const Text(
+                      'readings',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 10),
                     ),
-                  ),
+                  ],
+                ),
               ],
-            ),
+            ],
           ),
-          if (hasLiveBpm) ...[  
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+          if (_latestConfidence > 0) ...[
+            const SizedBox(height: 14),
+            Row(
               children: [
-                Icon(Icons.radio_button_checked,
-                    color: AppColors.primaryGreen, size: 12),
-                const SizedBox(height: 2),
+                Icon(Icons.sensors_rounded, size: 14, color: _confidenceColor(_latestConfidence)),
+                const SizedBox(width: 6),
                 Text(
-                  '$_liveRecordsReceived',
+                  'Signal quality: $_latestConfidence%',
                   style: TextStyle(
-                    color: AppColors.primaryGreen,
-                    fontSize: 16,
+                    color: _confidenceColor(_latestConfidence),
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
-                ),
-                const Text(
-                  'readings',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 10),
                 ),
               ],
             ),

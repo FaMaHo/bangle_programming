@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
-import 'screens/today_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/insights_screen.dart';
 import 'screens/device_screen.dart';
 import 'screens/server_screen.dart';
@@ -136,12 +136,16 @@ class _MainNavigationState extends State<MainNavigation>
     with WidgetsBindingObserver {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    TodayScreen(),
-    InsightsScreen(),
-    DeviceScreen(),
-    ServerScreen(),
-  ];
+  List<Widget> get _screens => [
+        HomeScreen(onNavigateToTab: _navigateToTab),
+        const InsightsScreen(),
+        const DeviceScreen(),
+        const ServerScreen(),
+      ];
+
+  void _navigateToTab(int index) {
+    setState(() => _currentIndex = index);
+  }
 
   @override
   void initState() {
@@ -221,9 +225,9 @@ class _MainNavigationState extends State<MainNavigation>
         backgroundColor: AppColors.cardBackground,
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.today_outlined),
-            selectedIcon: Icon(Icons.today),
-            label: 'Today',
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
           ),
           NavigationDestination(
             icon: Icon(Icons.insights_outlined),

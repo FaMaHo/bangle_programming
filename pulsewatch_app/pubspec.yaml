@@ -42,8 +42,6 @@ dependencies:
   # Icons
   cupertino_icons: ^1.0.8
 
-  mobile_scanner: ^5.2.3
-
   # On-device ONNX inference
   onnxruntime: ^1.4.1
 

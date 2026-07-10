@@ -17,6 +17,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
   int _weekMaxHR = 0;
   int _weekAvgHR = 0;
   int _totalReadings = 0;
+  int _weekAvgConfidence = 0;
 
   @override
   void initState() {
@@ -49,7 +50,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     final sevenDaysAgo = now.subtract(Duration(days: 7)).millisecondsSinceEpoch;
     final db = await _db.database;
     final stats = await db.rawQuery('''
-      SELECT 
+      SELECT
         MIN(bpm) as minHR,
         MAX(bpm) as maxHR,
         AVG(bpm) as avgHR,
@@ -57,7 +58,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
       FROM heart_rate
       WHERE timestamp >= ?
     ''', [sevenDaysAgo]);
-    
+    final avgConfidence = await _db.getAvgConfidence(sinceMillis: sevenDaysAgo);
+
     if (mounted) {
       setState(() {
         _weekData = weekData;
@@ -65,6 +67,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
         _weekMaxHR = (stats.first['maxHR'] as num?)?.toInt() ?? 0;
         _weekAvgHR = (stats.first['avgHR'] as num?)?.round() ?? 0;
         _totalReadings = (stats.first['count'] as int?) ?? 0;
+        _weekAvgConfidence = avgConfidence;
       });
     }
   }
@@ -198,6 +201,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
                     _buildStatItem('Min', _weekMinHR),
                     const SizedBox(width: 24),
                     _buildStatItem('Max', _weekMaxHR),
+                    if (_weekAvgConfidence > 0) ...[
+                      const SizedBox(width: 24),
+                      _buildStatItem('Signal', _weekAvgConfidence, suffix: '%'),
+                    ],
                   ],
                 ),
               ],
@@ -205,7 +212,9 @@ class _InsightsScreenState extends State<InsightsScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Data Quality Card
+          // Days Recorded Card — how many of the last 7 days have any data,
+          // rather than a guessed "expected sample count" that doesn't
+          // match how often the watch actually reports.
           if (_totalReadings > 0)
             Container(
               width: double.infinity,
@@ -225,7 +234,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Data Quality',
+                    'Days Recorded',
                     style: TextStyle(
                       color: AppColors.textSecondary,
                       fontSize: 14,
@@ -233,7 +242,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
                   ),
                   const SizedBox(height: 12),
                   LinearProgressIndicator(
-                    value: _calculateQuality(),
+                    value: _daysRecordedRatio(),
                     backgroundColor: AppColors.background,
                     valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryGreen),
                     minHeight: 8,
@@ -241,7 +250,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '${(_calculateQuality() * 100).toInt()}% complete',
+                    '${_daysRecordedCount()} of 7 days this week',
                     style: const TextStyle(
                       color: AppColors.textPrimary,
                       fontSize: 12,
@@ -288,7 +297,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     );
   }
 
-  Widget _buildStatItem(String label, int value) {
+  Widget _buildStatItem(String label, int value, {String suffix = ' BPM'}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -300,7 +309,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
           ),
         ),
         Text(
-          value > 0 ? '$value BPM' : '-- BPM',
+          value > 0 ? '$value$suffix' : '--$suffix',
           style: const TextStyle(
             color: AppColors.textPrimary,
             fontSize: 16,
@@ -311,11 +320,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     );
   }
 
-  double _calculateQuality() {
-    // 7 days * 24 hours * 60 min * 6 readings/min (10Hz sampled at 100ms)
-    final expectedReadings = 7 * 24 * 60 * 6; // ~60,480 readings per week
-    if (_totalReadings == 0) return 0;
-    final quality = _totalReadings / expectedReadings;
-    return quality > 1.0 ? 1.0 : quality;
-  }
+  int _daysRecordedCount() => _weekData.values.where((hasData) => hasData).length;
+
+  double _daysRecordedRatio() => _daysRecordedCount() / 7;
 }
