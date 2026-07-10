@@ -1,4 +1,14 @@
-from flask import Flask, request, jsonify, Response
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    Response,
+    render_template,
+    session,
+    redirect,
+    url_for,
+    send_from_directory,
+)
 import os
 import secrets
 import sys
@@ -54,9 +64,20 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
 app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
 jwt = JWTManager(app)
 
+# Separate from JWT — the researcher web portal uses a normal signed
+# session cookie (browser-friendly), while the mobile app and API use
+# bearer tokens. Same secret value, independent signing mechanisms.
+app.secret_key = _secret_key
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
 accounts.init_db()
 
 limiter = Limiter(get_remote_address, app=app, default_limits=[])
+
+APK_DIR = os.path.join(os.path.dirname(__file__), 'static', 'downloads')
+os.makedirs(APK_DIR, exist_ok=True)
+APK_FILENAME = 'pulsewatch.apk'
 
 
 def _tokens_for(user):
@@ -75,6 +96,17 @@ def researcher_required(fn):
     def wrapper(*args, **kwargs):
         if get_jwt().get('role') != 'researcher':
             return jsonify({'error': 'Researcher access required'}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def researcher_web_required(fn):
+    """Session-cookie auth for the browser-based researcher portal —
+    separate from the JWT bearer-token auth used by the mobile app/API."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if session.get('role') != 'researcher':
+            return redirect(url_for('researcher_login'))
         return fn(*args, **kwargs)
     return wrapper
 
@@ -256,11 +288,127 @@ def auth_refresh():
     return jsonify({'access_token': access_token}), 200
 
 
-# ─── Existing routes ───────────────────────────────────────────────────────────
+# ─── Website ─────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def home():
-    return "PulseWatch AI Backend is Running!"
+    return render_template('index.html')
+
+
+@app.route('/download', methods=['GET', 'POST'])
+@limiter.limit('10/hour')
+def download_page():
+    """Patient-facing: agree to the consent/terms, then get a one-time
+    enrollment code plus the app download link — self-service, replacing
+    a researcher having to hand out codes individually."""
+    if request.method == 'POST':
+        agreed = request.form.get('agree') == 'on'
+        if not agreed:
+            return render_template('download.html', error='Please confirm you agree before continuing.')
+
+        code, patient_id = accounts.create_enrollment_code()
+        return render_template('download.html', code=code, patient_id=patient_id)
+
+    return render_template('download.html')
+
+
+@app.route('/download-apk')
+def download_apk():
+    apk_path = os.path.join(APK_DIR, APK_FILENAME)
+    if not os.path.exists(apk_path):
+        return jsonify({'error': 'App download is not available yet.'}), 404
+    return send_from_directory(APK_DIR, APK_FILENAME, as_attachment=True)
+
+
+# ─── Researcher web portal ─────────────────────────────────────────────────────
+
+@app.route('/researcher/login', methods=['GET', 'POST'])
+@limiter.limit('10/minute')
+def researcher_login():
+    if request.method == 'POST':
+        user = accounts.verify_login(request.form.get('username', ''), request.form.get('password', ''))
+        if not user or user['role'] != 'researcher':
+            return render_template('researcher_login.html', error='Invalid username or password.')
+
+        session['role'] = 'researcher'
+        session['username'] = user['username']
+        return redirect(url_for('researcher_dashboard'))
+
+    return render_template('researcher_login.html')
+
+
+@app.route('/researcher/logout')
+def researcher_logout():
+    session.clear()
+    return redirect(url_for('researcher_login'))
+
+
+@app.route('/researcher/dashboard')
+@researcher_web_required
+def researcher_dashboard():
+    patients = accounts.list_patients()
+    return render_template('researcher_dashboard.html', patients=patients, username=session.get('username'))
+
+
+@app.route('/researcher/generate-code', methods=['POST'])
+@researcher_web_required
+def researcher_generate_code():
+    code, patient_id = accounts.create_enrollment_code()
+    patients = accounts.list_patients()
+    return render_template(
+        'researcher_dashboard.html',
+        patients=patients,
+        username=session.get('username'),
+        new_code=code,
+        new_patient_id=patient_id,
+    )
+
+
+@app.route('/researcher/patient/<patient_id>')
+@researcher_web_required
+def researcher_patient_detail(patient_id):
+    patient = accounts.get_patient_by_id(patient_id)
+    patient_path = os.path.join(UPLOAD_FOLDER, patient_id)
+
+    sessions = []
+    if os.path.exists(patient_path):
+        for session_id in sorted(os.listdir(patient_path)):
+            session_path = os.path.join(patient_path, session_id)
+            if os.path.isdir(session_path):
+                csv_files = [f for f in os.listdir(session_path) if f.endswith('.csv')]
+                sessions.append({'session_id': session_id, 'file_count': len(csv_files)})
+
+    return render_template(
+        'researcher_patient.html',
+        patient_id=patient_id,
+        patient=patient,
+        sessions=sessions,
+    )
+
+
+@app.route('/researcher/patient/<patient_id>/session/<session_id>/download')
+@researcher_web_required
+def researcher_download_session(patient_id, session_id):
+    session_path = os.path.join(UPLOAD_FOLDER, patient_id, session_id)
+    if not os.path.exists(session_path):
+        return jsonify({'error': 'Session not found'}), 404
+
+    csv_files = sorted(f for f in os.listdir(session_path) if f.endswith('.csv'))
+    combined = []
+    for csv_file in csv_files:
+        with open(os.path.join(session_path, csv_file), 'r', encoding='utf-8') as f:
+            combined.append(f.read())
+
+    body = '\n'.join(combined)
+    filename = f'{patient_id}_{session_id}.csv'
+    return Response(
+        body,
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'},
+    )
+
+
+# ─── Existing routes ───────────────────────────────────────────────────────────
 
 
 @app.route('/upload', methods=['POST'])

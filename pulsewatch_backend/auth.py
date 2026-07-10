@@ -157,3 +157,22 @@ def verify_login(username, password):
         if row is None or not check_password_hash(row['password_hash'], password):
             return None
         return dict(row)
+
+
+def list_patients():
+    """Researcher-side: every enrolled patient account, newest first."""
+    with _connect() as db:
+        rows = db.execute(
+            "SELECT username, patient_id, created_at FROM users "
+            "WHERE role = 'patient' ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_patient_by_id(patient_id):
+    with _connect() as db:
+        row = db.execute(
+            'SELECT username, patient_id, created_at FROM users WHERE patient_id = ?',
+            (patient_id,),
+        ).fetchone()
+        return dict(row) if row else None

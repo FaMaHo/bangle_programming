@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}PulseWatch AI{% endblock %}
+{% block content %}
+<div class="card" style="text-align:center;">
+  <h1>PulseWatch AI</h1>
+  <p class="subtitle">
+    A wearable system for early detection of cardiovascular risk, built on the
+    Bangle.js 2 smartwatch. Continuous heart rate and motion monitoring,
+    analyzed for early warning signs — as part of a cardiovascular research
+    study at Politehnica University.
+  </p>
+  <a class="button" href="{{ url_for('download_page') }}">Join the study &amp; get the app</a>
+  <div style="height:12px;"></div>
+  <a class="button secondary" href="{{ url_for('researcher_login') }}">Researcher login</a>
+</div>
+{% endblock %}

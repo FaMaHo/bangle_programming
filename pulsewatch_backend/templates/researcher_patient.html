@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ patient_id }} — PulseWatch AI{% endblock %}
+{% block content %}
+<div class="card wide">
+  <p class="muted"><a href="{{ url_for('researcher_dashboard') }}">← All patients</a></p>
+  <h1 style="margin-top: 10px;">{{ patient_id }}</h1>
+  {% if patient %}
+  <p class="subtitle">{{ patient.username }} · enrolled {{ patient.created_at[:10] }}</p>
+  {% endif %}
+
+  {% if sessions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Session</th>
+        <th>Files</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td><code>{{ s.session_id }}</code></td>
+        <td class="muted">{{ s.file_count }} file{{ 's' if s.file_count != 1 else '' }}</td>
+        <td>
+          <a href="{{ url_for('researcher_download_session', patient_id=patient_id, session_id=s.session_id) }}">Download CSV →</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No sessions uploaded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

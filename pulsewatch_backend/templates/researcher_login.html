@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Researcher Login — PulseWatch AI{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Researcher login</h1>
+  <p class="subtitle">View enrolled patients, generate enrollment codes, and download session data.</p>
+
+  {% if error %}
+  <div class="error-box">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST">
+    <label class="field-label" for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" required>
+
+    <label class="field-label" for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+    <button class="button" type="submit">Log in</button>
+  </form>
+</div>
+{% endblock %}
