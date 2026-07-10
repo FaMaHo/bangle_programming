@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Release APK build artifacts (too large for git; deployed manually to the server)
+*.apk
+pulsewatch_backend/static/downloads/
+
 # Python
 __pycache__/
 *.pyc
