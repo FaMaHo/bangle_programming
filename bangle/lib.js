@@ -5,12 +5,20 @@ let storageFile;
 // by defaulte it doesn't record until we let it record in the watch settings
 let isRecording = false;
 let dataBuffer = [];
+let liveBuffer = [];
+let liveFlushTimer = null;
 let startTime = 0;
 let lastSaveTime = 0;
 let totalSaved = 0;
 
 const CONFIG = {
   saveInterval: 5 * 60 * 1000,  // 5 minutes for test, should be changed later
+  // Batch live BLE sends instead of one BLE transmission per HRM sample
+  // (~once/sec). Full-fidelity data is always written to flash every
+  // saveInterval regardless of BLE connection, so live streaming is just a
+  // best-effort feed for the phone's UI/real-time scoring — it doesn't need
+  // per-sample latency, and batching cuts radio wake-ups ~15x for battery.
+  liveFlushInterval: 15 * 1000,
   appName: "pulsewatch"
 };
 
@@ -60,6 +68,26 @@ function saveData() {
   }
 }
 
+function formatLine(d) {
+  return d.t + "," + d.b + "," + d.r + "," + d.c + "," + d.x + "," + d.y + "," + d.z;
+}
+
+// 📡 Sends everything buffered since the last flush as one multi-line BLE
+// burst instead of transmitting per sample. The phone app reassembles BLE
+// notification fragments and splits multi-line payloads back into
+// individual samples, so batching here is transparent to it.
+function flushLiveBuffer() {
+  if (liveBuffer.length === 0) return;
+  try {
+    var lines = liveBuffer.map(formatLine).join("\n");
+    Bluetooth.println(lines);
+    console.log("BLE TX: " + liveBuffer.length + " samples batched");
+  } catch(e) {
+    console.log("BLE TX Error: " + e);
+  }
+  liveBuffer = [];
+}
+
 function onHRM(hrm) {
   if (!isRecording) return;
 
@@ -82,19 +110,8 @@ function onHRM(hrm) {
   // Buffer for file saving (unchanged)
   dataBuffer.push(data);
 
-  // 📡 SEND LIVE DATA OVER BLUETOOTH via Nordic UART Service
-  try {
-    var line = data.t + "," + data.b + "," + data.r + "," + data.c + "," +
-               data.x + "," + data.y + "," + data.z;
-    Bluetooth.println(line);
-
-    // Debug: Log every 10th reading to console
-    if (dataBuffer.length % 10 === 0) {
-      console.log("BLE TX: BPM=" + data.b + " Records=" + dataBuffer.length);
-    }
-  } catch(e) {
-    console.log("BLE TX Error: " + e);
-  }
+  // Buffer for the next batched live BLE send (see flushLiveBuffer)
+  liveBuffer.push(data);
 
   // File saving logic (unchanged)
   if (Math.floor(Date.now()) - lastSaveTime >= CONFIG.saveInterval) {
@@ -109,18 +126,25 @@ exports.start = function() {
   startTime = Math.floor(Date.now());  // Convert to integer (no decimals)
   lastSaveTime = Math.floor(Date.now());  // Convert to integer (no decimals)
   dataBuffer = [];
+  liveBuffer = [];
 
   Bangle.on('HRM', onHRM);
   Bangle.setHRMPower(1, CONFIG.appName);
+  liveFlushTimer = setInterval(flushLiveBuffer, CONFIG.liveFlushInterval);
 
   console.log("✅ PulseWatch recording started");
 };
 
 exports.stop = function() {
   if (!isRecording) return;
-  
+
+  if (liveFlushTimer) {
+    clearInterval(liveFlushTimer);
+    liveFlushTimer = null;
+  }
+  flushLiveBuffer(); // send anything still buffered before stopping
   saveData();
-  
+
   Bangle.removeListener('HRM', onHRM);
   Bangle.setHRMPower(0, CONFIG.appName);
   
@@ -171,6 +195,10 @@ exports.reload = function() {
   
   // Stop current recording if any
   if (isRecording) {
+    if (liveFlushTimer) {
+      clearInterval(liveFlushTimer);
+      liveFlushTimer = null;
+    }
     Bangle.removeListener('HRM', onHRM);
     Bangle.setHRMPower(0, CONFIG.appName);
     isRecording = false;
