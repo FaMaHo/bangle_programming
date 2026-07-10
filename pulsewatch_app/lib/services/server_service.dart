@@ -12,9 +12,10 @@ class ServerService {
 
   static const _autoUploadIntervalHours = 6;
 
-  // Update this U// Tailscale permanent IP — works from China and Romania.
-  // No tunnel or QR code needed. Just make sure Tailscale is running on both devices.
-  static const _defaultServerUrl = 'http://100.67.217.9:5001';
+  // Production backend — always-on VPS with a real domain and HTTPS.
+  // Works from any network (including China), no same-WiFi pairing or
+  // Tailscale required on the patient's phone.
+  static const _defaultServerUrl = 'https://pulsana.org';
 
   // ─── Settings ────────────────────────────────────────────────────────────
 
