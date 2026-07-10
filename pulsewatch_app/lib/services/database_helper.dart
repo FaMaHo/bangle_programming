@@ -162,6 +162,7 @@ class DatabaseHelper {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT h.timestamp, h.bpm,
+             COALESCE(h.rr_interval_ms, 0) AS rr,
              COALESCE(a.x, 0) AS x,
              COALESCE(a.y, 0) AS y,
              COALESCE(a.z, 0) AS z

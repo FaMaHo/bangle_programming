@@ -7,6 +7,7 @@ class BpmSample {
   final DateTime time;
   final double bpm;
   final double ax, ay, az; // raw accelerometer counts from Bangle.js
+  final double rr; // real beat-to-beat RR interval (ms) from the watch, 0 if unavailable
 
   const BpmSample({
     required this.time,
@@ -14,6 +15,7 @@ class BpmSample {
     required this.ax,
     required this.ay,
     required this.az,
+    this.rr = 0,
   });
 }
 
@@ -27,8 +29,12 @@ class HrvFeatureExtractor {
   static Map<String, double> compute(List<BpmSample> window) {
     if (window.length < minSamples) return _zeros();
 
-    // RR intervals (ms) approximated from BPM stream
-    final rr = window.map((s) => 60000.0 / s.bpm).toList();
+    // RR intervals (ms) — use the watch's real beat-to-beat value when
+    // available, falling back to a BPM-derived approximation only for
+    // samples where the watch didn't report one (rr <= 0).
+    final rr = window
+        .map((s) => s.rr > 0 ? s.rr : 60000.0 / s.bpm)
+        .toList();
     final n = rr.length;
     final bpms = window.map((s) => s.bpm).toList();
     final mags = window
@@ -52,9 +58,10 @@ class HrvFeatureExtractor {
     final triIndex = _triIndex(rr);
 
     // ── Frequency-domain HRV (simple rectangular DFT — approximate) ─────────
-    // RR series is treated as evenly sampled at 1 Hz (BPM stream rate).
-    // Note: true RR intervals require beat-to-beat detection; this is an
-    // approximation. LF/HF values are usable for relative risk comparison.
+    // RR magnitudes are now the watch's real beat-to-beat values (see rr
+    // above), but the DFT still treats the series as evenly sampled in time
+    // at the BLE reporting rate rather than using true beat timestamps —
+    // LF/HF are still approximate, just less so than before.
     final detrended = rr.map((v) => v - meanRr).toList();
     final bands = _spectralBands(detrended, 1.0);
     final lfPower = bands['lf']!;

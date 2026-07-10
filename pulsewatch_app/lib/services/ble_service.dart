@@ -66,6 +66,21 @@ class BleService {
   List<String> _fileList = [];
   int _currentFileIndex = 0;
 
+  // Reassembles complete lines out of BLE notification fragments. A single
+  // CSV line (30-40+ chars) routinely exceeds one BLE packet's payload, so
+  // notifications cannot be assumed to contain whole lines — without this,
+  // a line split mid-notification either fails to parse (dropped sample)
+  // or, worse, parses into garbage that gets a false comma-count match.
+  String _uartCarry = '';
+
+  // Cached most-recent accelerometer reading for T-Watch, whose HR and
+  // accel values arrive on separate characteristics/notifications rather
+  // than one combined line like Bangle.js — needed to build a BpmSample.
+  double _tWatchLastAx = 0, _tWatchLastAy = 0, _tWatchLastAz = 0;
+
+  StreamSubscription<List<ScanResult>>? _scanResultsSubscription;
+  StreamSubscription<BluetoothConnectionState>? _deviceConnectionSubscription;
+
   bool get isScanning => _isScanning;
   bool get isConnected => _connectedDevice != null;
   BluetoothDevice? get connectedDevice => _connectedDevice;
@@ -91,7 +106,11 @@ class BleService {
     _scanResults = [];
     _isScanning = true;
 
-    FlutterBluePlus.scanResults.listen((results) {
+    // Cancel any previous listener first — without this, every scan added
+    // another permanent listener on FlutterBluePlus.scanResults that was
+    // never cleaned up.
+    await _scanResultsSubscription?.cancel();
+    _scanResultsSubscription = FlutterBluePlus.scanResults.listen((results) {
       _scanResults = results;
       _devicesController.add(_scanResults);
     });
@@ -121,7 +140,11 @@ class BleService {
       _currentDeviceType = _detectDeviceType(device.platformName);
       print("🔍 Detected device type: $_currentDeviceType");
 
-      device.connectionState.listen((state) {
+      // Cancel any previous device's listener first — reconnects (manual or
+      // auto-reconnect on app resume) otherwise stacked up a new listener
+      // on every call without ever releasing the old one.
+      await _deviceConnectionSubscription?.cancel();
+      _deviceConnectionSubscription = device.connectionState.listen((state) {
         _connectionStateController.add(state);
         if (state == BluetoothConnectionState.disconnected) {
           _connectedDevice = null;
@@ -241,12 +264,18 @@ class BleService {
   // BANGLE.JS UART SUBSCRIPTION
   Future<void> _subscribeToUARTBangle() async {
     if (_bangleUartRxCharacteristic != null) {
+      _uartCarry = '';
       await _bangleUartRxCharacteristic!.setNotifyValue(true);
       _bangleUartRxCharacteristic!.lastValueStream.listen((value) async {
         if (value.isEmpty) return;
-        String chunk = utf8.decode(value);
 
-        List<String> lines = chunk.split('\n');
+        // Reassemble fragments into complete lines first. A BLE notification
+        // may end mid-line — only fully-terminated lines are processed here;
+        // any trailing partial line is carried over to the next notification.
+        _uartCarry += utf8.decode(value);
+        List<String> lines = _uartCarry.split('\n');
+        _uartCarry = lines.removeLast();
+
         for (String line in lines) {
           line = line.trim();
           if (line.isEmpty) continue;
@@ -270,11 +299,12 @@ class BleService {
               await _db.insertAccelerometerWithTimestamp(timestamp, x, y, z, deviceId);
               _liveBpmController.add(bpm);
               _liveSampleController.add(BpmSample(
-                time: DateTime.now(),
+                time: DateTime.fromMillisecondsSinceEpoch(timestamp),
                 bpm: bpm.toDouble(),
                 ax: x.toDouble(),
                 ay: y.toDouble(),
                 az: z.toDouble(),
+                rr: rrIntervalMs.toDouble(),
               ));
 
               // Update live count (only if NOT in file-sync mode)
@@ -318,7 +348,11 @@ class BleService {
               int x = int.parse(parts[0].trim());
               int y = int.parse(parts[1].trim());
               int z = int.parse(parts[2].trim());
-              
+
+              _tWatchLastAx = x.toDouble();
+              _tWatchLastAy = y.toDouble();
+              _tWatchLastAz = z.toDouble();
+
               // Save to database with current timestamp
               await _db.insertAccelerometer(x, y, z, deviceId);
             } catch (e) {
@@ -339,10 +373,19 @@ class BleService {
           // Format: "70" (just BPM)
           try {
             int bpm = int.parse(data.trim());
-            
+
             // Save to database with current timestamp
             await _db.insertHeartRate(bpm, deviceId);
             _liveBpmController.add(bpm);
+            // T-Watch has no RR-interval output, unlike Bangle.js — HRV
+            // features fall back to the BPM-derived approximation for it.
+            _liveSampleController.add(BpmSample(
+              time: DateTime.now(),
+              bpm: bpm.toDouble(),
+              ax: _tWatchLastAx,
+              ay: _tWatchLastAy,
+              az: _tWatchLastAz,
+            ));
             _totalRecords++;
             
             // Update progress occasionally

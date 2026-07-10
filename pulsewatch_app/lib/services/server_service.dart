@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:http/http.dart' as http;
-import 'package:multicast_dns/multicast_dns.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'database_helper.dart';
@@ -74,78 +73,18 @@ class ServerService {
     return stats.heartRateRecords > 0;
   }
 
-  // ─── mDNS Discovery ───────────────────────────────────────────────────────
+  // ─── Smart upload ─────────────────────────────────────────────────────────
 
-  /// Scans the local network for a PulseWatch server announced via mDNS
-  /// (_pulsewatch._tcp.local). Times out after 5 seconds.
-  /// Returns the server base URL (e.g. http://192.168.1.42:5001) or null.
-  Future<String?> discoverServerViaMdns() async {
-    final completer = Completer<String?>();
-    final client = MDnsClient();
-
-    try {
-      await client.start();
-
-      // Timeout: give up after 5 s if nothing found
-      Timer(const Duration(seconds: 5), () {
-        if (!completer.isCompleted) completer.complete(null);
-      });
-
-      client
-          .lookup<PtrResourceRecord>(
-            ResourceRecordQuery.serverPointer('_pulsewatch._tcp.local'),
-          )
-          .listen((ptr) {
-        client
-            .lookup<SrvResourceRecord>(
-              ResourceRecordQuery.service(ptr.domainName),
-            )
-            .listen((srv) {
-          client
-              .lookup<IPAddressResourceRecord>(
-                ResourceRecordQuery.addressIPv4(srv.target),
-              )
-              .listen((ip) {
-            if (!completer.isCompleted) {
-              completer
-                  .complete('http://${ip.address.address}:${srv.port}');
-            }
-          });
-        });
-      });
-
-      return await completer.future;
-    } catch (_) {
-      if (!completer.isCompleted) completer.complete(null);
-      return null;
-    } finally {
-      client.stop();
-    }
-  }
-
-  // ─── Smart upload (hybrid) ────────────────────────────────────────────────
-
-  /// Hybrid upload strategy:
-  ///   1. Try the stored server URL directly.
-  ///   2. If unreachable, scan the local network via mDNS and update the
-  ///      stored URL if a server is found.
-  ///   3. If still unreachable, return a graceful failure with needsRescan=true
-  ///      so the UI can prompt the user to scan a new QR code.
+  /// Tries the configured server URL (the fixed production domain unless
+  /// overridden) and uploads if reachable. No local-network discovery is
+  /// needed now that the backend is an always-on public domain rather than
+  /// a same-WiFi researcher's laptop.
   Future<UploadResult> smartUpload() async {
-    // Step 1 — stored URL
     final stored = await getServerUrl();
     if (stored != null && stored.isNotEmpty) {
       if (await testConnection()) return uploadData();
     }
 
-    // Step 2 — mDNS discovery
-    final discovered = await discoverServerViaMdns();
-    if (discovered != null) {
-      await setServerUrl(discovered); // keep it for next time
-      if (await testConnection()) return uploadData();
-    }
-
-    // Step 3 — give up gracefully
     return UploadResult(
       success: false,
       message: 'Server not reachable.',

@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, Response
 import os
 import secrets
-import socket
 import sys
 import io
 import base64
@@ -16,7 +15,6 @@ from datetime import datetime, timedelta
 from functools import wraps
 import csv
 from io import StringIO
-import threading
 
 from flask_jwt_extended import (
     JWTManager,
@@ -79,56 +77,6 @@ def researcher_required(fn):
             return jsonify({'error': 'Researcher access required'}), 403
         return fn(*args, **kwargs)
     return wrapper
-
-
-def _get_local_ip():
-    """Read host IP from environment variable set at docker-compose time."""
-    ip = os.environ.get('HOST_IP', '')
-    if ip:
-        return ip
-    # fallback
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return '127.0.0.1'
-
-
-# ─── mDNS Service Discovery ──────────────────────────────────────────────────────────────────────
-
-_zeroconf_instance = None
-
-
-def _start_mdns(port=5001):
-    # Announce this server on the local network as _pulsewatch._tcp.local
-    # so the Flutter app can discover the current IP without a QR re-scan.
-    # Only works when running directly (python3 app.py), not inside Docker
-    # with default bridge networking.
-    global _zeroconf_instance
-    try:
-        from zeroconf import ServiceInfo, Zeroconf
-        ip = _get_local_ip()
-        if ip == '127.0.0.1':
-            return  # loopback only - nothing useful to announce
-        _zeroconf_instance = Zeroconf()
-        info = ServiceInfo(
-            '_pulsewatch._tcp.local.',
-            'PulseWatch._pulsewatch._tcp.local.',
-            addresses=[socket.inet_aton(ip)],
-            port=port,
-            properties={'version': b'1'},
-        )
-        _zeroconf_instance.register_service(info)
-        print(f'✅ mDNS registered: pulsewatch @ {ip}:{port}')
-    except Exception as e:
-        print(f'⚠️  mDNS registration skipped: {e}')
-
-
-# Start mDNS in background so it does not delay server startup
-threading.Thread(target=_start_mdns, daemon=True).start()
 
 
 # ─── QR Code ──────────────────────────────────────────────────────────────────

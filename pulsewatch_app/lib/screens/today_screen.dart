@@ -117,6 +117,7 @@ class _TodayScreenState extends State<TodayScreen>
           ax:   (r['x']   as num).toDouble(),
           ay:   (r['y']   as num).toDouble(),
           az:   (r['z']   as num).toDouble(),
+          rr:   (r['rr']  as num).toDouble(),
         )).toList();
       }
       final features = HrvFeatureExtractor.compute(window);
