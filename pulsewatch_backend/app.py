@@ -1,17 +1,84 @@
 from flask import Flask, request, jsonify, Response
 import os
+import secrets
 import socket
+import sys
 import io
 import base64
-from datetime import datetime
+import warnings
+
+# Windows' console defaults to cp1252, which can't encode the emoji used in
+# status prints below and crashes the request instead of just logging it.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+from datetime import datetime, timedelta
+from functools import wraps
 import csv
 from io import StringIO
 import threading
+
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    create_refresh_token,
+    get_jwt,
+    get_jwt_identity,
+    jwt_required,
+)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+import auth as accounts
 
 app = Flask(__name__)
 
 UPLOAD_FOLDER = 'patient_data'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Public base URL patients connect to. Defaults to the production domain;
+# override with PUBLIC_SERVER_URL for local/dev testing (e.g. via the LAN IP).
+PUBLIC_SERVER_URL = os.environ.get('PUBLIC_SERVER_URL', 'https://pulsana.org')
+
+# ─── Auth setup ──────────────────────────────────────────────────────────────
+
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    warnings.warn(
+        'SECRET_KEY is not set — using a random key that changes every '
+        'restart (all existing sessions will be invalidated). This is fine '
+        'for local development only; production must set SECRET_KEY.'
+    )
+    _secret_key = secrets.token_hex(32)
+
+app.config['JWT_SECRET_KEY'] = _secret_key
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
+jwt = JWTManager(app)
+
+accounts.init_db()
+
+limiter = Limiter(get_remote_address, app=app, default_limits=[])
+
+
+def _tokens_for(user):
+    extra_claims = {'role': user['role'], 'patient_id': user['patient_id']}
+    return {
+        'access_token': create_access_token(identity=user['username'], additional_claims=extra_claims),
+        'refresh_token': create_refresh_token(identity=user['username'], additional_claims=extra_claims),
+        'patient_id': user['patient_id'],
+        'role': user['role'],
+    }
+
+
+def researcher_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def wrapper(*args, **kwargs):
+        if get_jwt().get('role') != 'researcher':
+            return jsonify({'error': 'Researcher access required'}), 403
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 def _get_local_ip():
@@ -70,15 +137,14 @@ threading.Thread(target=_start_mdns, daemon=True).start()
 def qr_code_page():
     """
     Serves an HTML page with a scannable QR code.
-    The QR encodes this server's base URL (http://LAN_IP:5001).
-    Researcher opens this in a browser and shows it to the patient to scan.
+    The QR encodes this server's public base URL. Researcher opens this in
+    a browser and shows it to the patient to scan.
     """
     try:
         import qrcode
         from qrcode.image.pure import PyPNGImage
 
-        ip = _get_local_ip()
-        server_url = f'http://{ip}:5001'
+        server_url = PUBLIC_SERVER_URL
 
         qr = qrcode.QRCode(
             version=None,
@@ -176,7 +242,7 @@ def qr_code_page():
     <div class="url-box">
       <span class="dot"></span>{server_url}
     </div>
-    <p class="hint">Make sure your phone and this computer<br>are on the same Wi-Fi network.</p>
+    <p class="hint">Works over any internet connection —<br>no need to be on the same Wi-Fi network.</p>
   </div>
 </body>
 </html>"""
@@ -191,6 +257,57 @@ def qr_code_page():
         return jsonify({'error': str(e)}), 500
 
 
+# ─── Auth routes ─────────────────────────────────────────────────────────────
+
+@app.route('/auth/enroll', methods=['POST'])
+@researcher_required
+def auth_enroll():
+    """Researcher generates a one-time code + fresh patient_id for a new participant."""
+    code, patient_id = accounts.create_enrollment_code()
+    return jsonify({'code': code, 'patient_id': patient_id, 'expires_in_hours': 72}), 201
+
+
+@app.route('/auth/claim', methods=['POST'])
+@limiter.limit('10/minute')
+def auth_claim():
+    """Patient turns a researcher-issued enrollment code into a real account."""
+    data = request.get_json(silent=True) or {}
+    code = data.get('code', '')
+    username = data.get('username', '')
+    password = data.get('password', '')
+
+    if not code or not username or not password:
+        return jsonify({'error': 'code, username, and password are required'}), 400
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    user, error = accounts.claim_enrollment_code(code, username, password)
+    if error:
+        return jsonify({'error': error}), 400
+
+    return jsonify(_tokens_for(user)), 201
+
+
+@app.route('/auth/login', methods=['POST'])
+@limiter.limit('10/minute')
+def auth_login():
+    data = request.get_json(silent=True) or {}
+    user = accounts.verify_login(data.get('username', ''), data.get('password', ''))
+    if not user:
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    return jsonify(_tokens_for(user)), 200
+
+
+@app.route('/auth/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def auth_refresh():
+    claims = get_jwt()
+    extra_claims = {'role': claims.get('role'), 'patient_id': claims.get('patient_id')}
+    access_token = create_access_token(identity=get_jwt_identity(), additional_claims=extra_claims)
+    return jsonify({'access_token': access_token}), 200
+
+
 # ─── Existing routes ───────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -199,6 +316,7 @@ def home():
 
 
 @app.route('/upload', methods=['POST'])
+@jwt_required()
 def upload_data():
     try:
         csv_data = request.data.decode('utf-8')
@@ -209,8 +327,12 @@ def upload_data():
         lines = csv_data.strip().split('\n')
         record_count = len(lines) - 1
 
+        # patient_id comes from the verified token, never from a client
+        # header — a client can no longer claim to be a different patient.
+        patient_id = get_jwt().get('patient_id')
+        if not patient_id:
+            return jsonify({'error': 'This account is not associated with a patient_id'}), 403
         device_id = request.headers.get('X-Device-ID', 'unknown')
-        patient_id = request.headers.get('X-Patient-ID', 'unknown')
         session_id = request.headers.get('X-Session-ID', datetime.now().strftime('%Y%m%d_%H%M%S'))
 
         save_path = os.path.join(UPLOAD_FOLDER, patient_id, session_id)
@@ -244,12 +366,15 @@ def upload_data():
 
 
 @app.route('/upload_chunk', methods=['POST'])
+@jwt_required()
 def upload_chunk():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
 
     file = request.files['file']
-    patient_id = request.form.get('patient_id', 'unknown')
+    patient_id = get_jwt().get('patient_id')
+    if not patient_id:
+        return jsonify({'error': 'This account is not associated with a patient_id'}), 403
     session_id = request.form.get('session_id', 'session_001')
     chunk_index = request.form.get('chunk_index', '0')
 
@@ -267,12 +392,15 @@ def upload_chunk():
 
 
 @app.route('/upload_recorder_log', methods=['POST'])
+@jwt_required()
 def upload_recorder_log():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
 
     file = request.files['file']
-    patient_id = request.form.get('patient_id', 'unknown')
+    patient_id = get_jwt().get('patient_id')
+    if not patient_id:
+        return jsonify({'error': 'This account is not associated with a patient_id'}), 403
     session_id = request.form.get('session_id', 'session_001')
     upload_timestamp = request.form.get('timestamp', datetime.now().isoformat())
 
@@ -333,7 +461,12 @@ def upload_recorder_log():
 
 
 @app.route('/patient/<patient_id>/sessions', methods=['GET'])
+@jwt_required()
 def get_patient_sessions(patient_id):
+    claims = get_jwt()
+    if claims.get('role') != 'researcher' and claims.get('patient_id') != patient_id:
+        return jsonify({'error': 'Forbidden'}), 403
+
     patient_path = os.path.join(UPLOAD_FOLDER, patient_id)
 
     if not os.path.exists(patient_path):
@@ -359,7 +492,12 @@ def get_patient_sessions(patient_id):
 
 
 @app.route('/patient/<patient_id>/session/<session_id>/data', methods=['GET'])
+@jwt_required()
 def get_session_data(patient_id, session_id):
+    claims = get_jwt()
+    if claims.get('role') != 'researcher' and claims.get('patient_id') != patient_id:
+        return jsonify({'error': 'Forbidden'}), 403
+
     session_path = os.path.join(UPLOAD_FOLDER, patient_id, session_id)
 
     if not os.path.exists(session_path):
@@ -393,4 +531,5 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=5001, debug=debug_mode)

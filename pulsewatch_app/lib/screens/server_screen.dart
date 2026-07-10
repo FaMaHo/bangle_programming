@@ -570,7 +570,7 @@ class _ServerCard extends StatelessWidget {
                   style: const TextStyle(
                       fontSize: 13, color: AppColors.textPrimary),
                   decoration: InputDecoration(
-                    hintText: 'http://192.168.1.100:5001',
+                    hintText: 'https://pulsana.org',
                     hintStyle: TextStyle(
                         color: AppColors.textSecondary.withOpacity(0.5),
                         fontSize: 13),

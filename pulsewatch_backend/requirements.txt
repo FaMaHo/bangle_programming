@@ -9,3 +9,9 @@ packaging==25.0
 Werkzeug==3.1.4
 qrcode[pil]==8.0
 zeroconf==0.134.0
+
+# Authentication
+Flask-JWT-Extended==4.7.4
+Flask-Limiter==4.1.1
+limits==5.8.0
+PyJWT==2.13.0
