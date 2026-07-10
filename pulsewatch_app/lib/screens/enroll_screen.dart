@@ -2,14 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
-import 'login_screen.dart';
 
 /// First-time setup: turn a one-time enrollment code (given by the
 /// researcher) into a real account by choosing a username and password.
 class EnrollScreen extends StatefulWidget {
   final VoidCallback onEnrolled;
+  final VoidCallback onSwitchToLogin;
 
-  const EnrollScreen({super.key, required this.onEnrolled});
+  const EnrollScreen({
+    super.key,
+    required this.onEnrolled,
+    required this.onSwitchToLogin,
+  });
 
   @override
   State<EnrollScreen> createState() => _EnrollScreenState();
@@ -206,15 +210,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
                 const SizedBox(height: 20),
                 Center(
                   child: TextButton(
-                    onPressed: _isSubmitting
-                        ? null
-                        : () {
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(
-                                builder: (_) => LoginScreen(onLoggedIn: widget.onEnrolled),
-                              ),
-                            );
-                          },
+                    onPressed: _isSubmitting ? null : widget.onSwitchToLogin,
                     child: const Text(
                       'I already have an account',
                       style: TextStyle(color: AppColors.primaryGreen, fontWeight: FontWeight.w600),

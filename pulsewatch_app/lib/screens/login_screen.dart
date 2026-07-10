@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
-import 'enroll_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   final VoidCallback onLoggedIn;
+  final VoidCallback onSwitchToEnroll;
 
-  const LoginScreen({super.key, required this.onLoggedIn});
+  const LoginScreen({
+    super.key,
+    required this.onLoggedIn,
+    required this.onSwitchToEnroll,
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -172,15 +176,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 20),
                 Center(
                   child: TextButton(
-                    onPressed: _isSubmitting
-                        ? null
-                        : () {
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(
-                                builder: (_) => EnrollScreen(onEnrolled: widget.onLoggedIn),
-                              ),
-                            );
-                          },
+                    onPressed: _isSubmitting ? null : widget.onSwitchToEnroll,
                     child: const Text(
                       'I have an enrollment code instead',
                       style: TextStyle(color: AppColors.primaryGreen, fontWeight: FontWeight.w600),

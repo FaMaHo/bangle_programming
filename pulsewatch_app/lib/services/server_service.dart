@@ -36,8 +36,7 @@ class ServerService {
   }
 
   Future<String> getDisplayName() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('profile_display_name') ?? 'Participant';
+    return await AuthService.instance.getUsername() ?? 'Participant';
   }
 
   // ─── Last upload tracking ─────────────────────────────────────────────────

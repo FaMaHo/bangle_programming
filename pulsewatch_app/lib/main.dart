@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'theme/app_theme.dart';
 import 'screens/today_screen.dart';
 import 'screens/insights_screen.dart';
 import 'screens/device_screen.dart';
 import 'screens/server_screen.dart';
-import 'screens/profile_screen.dart';
 import 'screens/enroll_screen.dart';
+import 'screens/login_screen.dart';
 import 'screens/lock_screen.dart';
 import 'services/auth_service.dart';
 import 'services/biometric_lock_service.dart';
@@ -35,8 +34,10 @@ class PulseWatchApp extends StatelessWidget {
   }
 }
 
-/// Routes between account setup, profile setup, and the main app based on
-/// whether the device has a logged-in account and a completed profile.
+/// Routes between account setup and the main app based on whether the
+/// device has a logged-in account. Owns the enroll/login toggle directly
+/// (rather than pushing routes for it) so its own state — and the
+/// onLoggedIn callback those screens hold — never gets torn down mid-flow.
 class _AppEntry extends StatefulWidget {
   const _AppEntry();
 
@@ -47,7 +48,7 @@ class _AppEntry extends StatefulWidget {
 class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
   bool _isLoading = true;
   bool _isLoggedIn = false;
-  bool _profileComplete = false;
+  bool _showLogin = false;
   bool _lockEnabled = false;
   bool _isUnlocked = true;
 
@@ -75,8 +76,6 @@ class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
 
   Future<void> _checkState() async {
     final loggedIn = await AuthService.instance.isLoggedIn();
-    final prefs = await SharedPreferences.getInstance();
-    final profileComplete = prefs.getBool('profile_complete') ?? false;
 
     final lockEnabled = await BiometricLockService.instance.isEnabled() &&
         await BiometricLockService.instance.isDeviceSupported();
@@ -84,7 +83,6 @@ class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _isLoggedIn = loggedIn;
-        _profileComplete = profileComplete;
         _lockEnabled = lockEnabled;
         _isUnlocked = !lockEnabled;
         _isLoading = false;
@@ -94,10 +92,6 @@ class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
 
   void _onLoggedIn() {
     setState(() => _isLoggedIn = true);
-  }
-
-  void _onProfileComplete() {
-    setState(() => _profileComplete = true);
   }
 
   @override
@@ -112,11 +106,15 @@ class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
     }
 
     if (!_isLoggedIn) {
-      return EnrollScreen(onEnrolled: _onLoggedIn);
-    }
-
-    if (!_profileComplete) {
-      return ProfileScreen(onProfileComplete: _onProfileComplete);
+      return _showLogin
+          ? LoginScreen(
+              onLoggedIn: _onLoggedIn,
+              onSwitchToEnroll: () => setState(() => _showLogin = false),
+            )
+          : EnrollScreen(
+              onEnrolled: _onLoggedIn,
+              onSwitchToLogin: () => setState(() => _showLogin = true),
+            );
     }
 
     if (_lockEnabled && !_isUnlocked) {
