@@ -7,7 +7,9 @@ import 'screens/device_screen.dart';
 import 'screens/server_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/enroll_screen.dart';
+import 'screens/lock_screen.dart';
 import 'services/auth_service.dart';
+import 'services/biometric_lock_service.dart';
 import 'services/server_service.dart';
 import 'services/ble_service.dart';
 import 'services/inference_service.dart';
@@ -42,25 +44,49 @@ class _AppEntry extends StatefulWidget {
   State<_AppEntry> createState() => _AppEntryState();
 }
 
-class _AppEntryState extends State<_AppEntry> {
+class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
   bool _isLoading = true;
   bool _isLoggedIn = false;
   bool _profileComplete = false;
+  bool _lockEnabled = false;
+  bool _isUnlocked = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-lock whenever the app leaves the foreground, so a stolen/borrowed
+  // unlocked phone doesn't leave health data exposed after backgrounding.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _lockEnabled) {
+      setState(() => _isUnlocked = false);
+    }
   }
 
   Future<void> _checkState() async {
     final loggedIn = await AuthService.instance.isLoggedIn();
     final prefs = await SharedPreferences.getInstance();
     final profileComplete = prefs.getBool('profile_complete') ?? false;
+
+    final lockEnabled = await BiometricLockService.instance.isEnabled() &&
+        await BiometricLockService.instance.isDeviceSupported();
+
     if (mounted) {
       setState(() {
         _isLoggedIn = loggedIn;
         _profileComplete = profileComplete;
+        _lockEnabled = lockEnabled;
+        _isUnlocked = !lockEnabled;
         _isLoading = false;
       });
     }
@@ -91,6 +117,10 @@ class _AppEntryState extends State<_AppEntry> {
 
     if (!_profileComplete) {
       return ProfileScreen(onProfileComplete: _onProfileComplete);
+    }
+
+    if (_lockEnabled && !_isUnlocked) {
+      return LockScreen(onUnlocked: () => setState(() => _isUnlocked = true));
     }
 
     return const MainNavigation();

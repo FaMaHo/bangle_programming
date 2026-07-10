@@ -4,6 +4,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../main.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import '../services/biometric_lock_service.dart';
 import '../services/server_service.dart';
 
 class ServerScreen extends StatefulWidget {
@@ -23,6 +24,8 @@ class _ServerScreenState extends State<ServerScreen> {
   DateTime? _lastUploadTime;
   String _displayName = '';
   String _patientId = '';
+  bool _biometricSupported = false;
+  bool _biometricEnabled = true;
 
   @override
   void initState() {
@@ -36,6 +39,8 @@ class _ServerScreenState extends State<ServerScreen> {
     final id = await _server.getPatientId();
     final stats = await _server.getDataStats();
     final lastUpload = await _server.getLastUploadTime();
+    final biometricSupported = await BiometricLockService.instance.isDeviceSupported();
+    final biometricEnabled = await BiometricLockService.instance.isEnabled();
 
     if (mounted) {
       setState(() {
@@ -44,11 +49,18 @@ class _ServerScreenState extends State<ServerScreen> {
         _patientId = id;
         _dataStats = stats;
         _lastUploadTime = lastUpload;
+        _biometricSupported = biometricSupported;
+        _biometricEnabled = biometricEnabled;
       });
       if (url != null && url.isNotEmpty) {
         _silentConnectionTest(url);
       }
     }
+  }
+
+  Future<void> _toggleBiometricLock(bool value) async {
+    await BiometricLockService.instance.setEnabled(value);
+    if (mounted) setState(() => _biometricEnabled = value);
   }
 
   Future<void> _testConnection() async {
@@ -226,6 +238,10 @@ class _ServerScreenState extends State<ServerScreen> {
             patientId: _patientId,
             onLogout: _logout,
           ),
+          if (_biometricSupported) ...[
+            const SizedBox(height: 12),
+            _AppLockToggle(enabled: _biometricEnabled, onChanged: _toggleBiometricLock),
+          ],
           const SizedBox(height: 16),
           _DataCard(stats: _dataStats, lastUploadTime: _lastUploadTime),
           const SizedBox(height: 16),
@@ -277,6 +293,49 @@ class _ServerScreenState extends State<ServerScreen> {
             ),
 
           const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppLockToggle extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _AppLockToggle({required this.enabled, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.fingerprint_rounded, color: AppColors.primaryGreen, size: 22),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Text(
+              'App lock',
+              style: TextStyle(
+                  color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Switch(
+            value: enabled,
+            onChanged: onChanged,
+            activeColor: AppColors.primaryGreen,
+          ),
         ],
       ),
     );

@@ -20,6 +20,9 @@ dependencies:
 
   # Secure token storage (Keychain / EncryptedSharedPreferences)
   flutter_secure_storage: ^9.2.2
+
+  # Biometric / device PIN app-lock
+  local_auth: ^2.3.0
   
   # State Management
   provider: ^6.1.2
