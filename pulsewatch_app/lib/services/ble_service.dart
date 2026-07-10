@@ -251,21 +251,22 @@ class BleService {
           line = line.trim();
           if (line.isEmpty) continue;
 
-          // 🔍 Try to parse as live CSV data (6 comma-separated integers)
+          // 🔍 Try to parse as live CSV data (7 comma-separated integers)
           List<String> parts = line.split(',');
-          if (parts.length == 6) {
+          if (parts.length == 7) {
             try {
-              // Parse all 6 fields
+              // Parse all 7 fields: timestamp,bpm,rr_interval_ms,confidence,x,y,z
               int timestamp = int.parse(parts[0]);
               int bpm = int.parse(parts[1]);
-              int confidence = int.parse(parts[2]);
-              int x = int.parse(parts[3]);
-              int y = int.parse(parts[4]);
-              int z = int.parse(parts[5]);
+              int rrIntervalMs = int.parse(parts[2]);
+              int confidence = int.parse(parts[3]);
+              int x = int.parse(parts[4]);
+              int y = int.parse(parts[5]);
+              int z = int.parse(parts[6]);
 
               // ✅ LIVE DATA — save to DB immediately
               String? deviceId = _connectedDevice?.remoteId.toString();
-              await _db.insertHeartRateWithTimestamp(timestamp, bpm, confidence, deviceId);
+              await _db.insertHeartRateWithTimestamp(timestamp, bpm, rrIntervalMs, confidence, deviceId);
               await _db.insertAccelerometerWithTimestamp(timestamp, x, y, z, deviceId);
               _liveBpmController.add(bpm);
               _liveSampleController.add(BpmSample(
@@ -511,15 +512,16 @@ class BleService {
       try {
         List<String> parts = line.split(',');
         
-        if (parts.length >= 6) {
+        if (parts.length >= 7) {
           int timestamp = int.parse(parts[0]);
           int bpm = int.parse(parts[1]);
-          int confidence = int.parse(parts[2]);
-          int accelX = int.parse(parts[3]);
-          int accelY = int.parse(parts[4]);
-          int accelZ = int.parse(parts[5]);
+          int rrIntervalMs = int.parse(parts[2]);
+          int confidence = int.parse(parts[3]);
+          int accelX = int.parse(parts[4]);
+          int accelY = int.parse(parts[5]);
+          int accelZ = int.parse(parts[6]);
           
-          await _db.insertHeartRateWithTimestamp(timestamp, bpm, confidence, deviceId);
+          await _db.insertHeartRateWithTimestamp(timestamp, bpm, rrIntervalMs, confidence, deviceId);
           await _db.insertAccelerometerWithTimestamp(timestamp, accelX, accelY, accelZ, deviceId);
           
           _totalRecords++;

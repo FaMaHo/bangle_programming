@@ -126,12 +126,17 @@ XGBoost AI Model
 
 ### Prerequisites
 
-- macOS or Ubuntu laptop (the research server machine)
+- macOS, Windows, or Ubuntu laptop (the research server machine)
 - Python 3.10+
-- Docker Desktop
+- Docker Desktop (optional — see backend setup below for a no-Docker option)
 - Flutter SDK 3.x
 - Android phone (tested on Samsung S908B) or iOS device
 - Bangle.js 2 smartwatch
+
+> **Building for iOS:** requires Xcode, which only runs on macOS. If you're
+> developing from Windows or Linux, the Android side of the app works
+> exactly the same as on macOS, but iOS builds/testing need a physical Mac,
+> a cloud Mac, or a macOS CI runner — there's no Windows workaround for this.
 
 ---
 
@@ -161,7 +166,7 @@ cd bangle_programming
 
 ### 3. Set Up the Backend Server
 
-**Install Python dependencies:**
+**macOS / Linux — install Python dependencies:**
 
 ```bash
 cd pulsewatch_backend
@@ -170,7 +175,19 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Build and start with Docker:**
+**Windows — install Python dependencies:**
+
+```powershell
+cd pulsewatch_backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Or just run `pulsewatch_backend\setup_windows.bat`, which installs dependencies
+and opens the Windows Firewall port for you.
+
+**Build and start with Docker (macOS / Linux):**
 
 ```bash
 # Get your laptop's WiFi IP first
@@ -183,10 +200,22 @@ HOST_IP=192.168.x.x docker-compose up -d
 **Or run without Docker (simpler for testing):**
 
 ```bash
+# macOS / Linux
 cd pulsewatch_backend
 source .venv/bin/activate
 python3 app.py
+
+# Windows
+cd pulsewatch_backend
+.venv\Scripts\activate
+python app.py
 ```
+
+On Windows you can also just double-click (or run) `start_server.bat` —
+it detects your LAN IP and starts the server in one step. See
+[`docs/WINDOWS_SERVER_DEPLOYMENT.md`](docs/WINDOWS_SERVER_DEPLOYMENT.md)
+for a full Docker-based Windows deployment guide (firewall rules, tunnels,
+auto-start on boot, etc.).
 
 **Verify it works:**
 
@@ -247,6 +276,7 @@ flutter run
 Your WiFi IP may change each time you reconnect. Always start the server with the current IP:
 
 ```bash
+# macOS / Linux
 cd pulsewatch_backend
 source .venv/bin/activate
 
@@ -255,6 +285,13 @@ HOST_IP=$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK
 
 # Option B: Direct Python (simpler)
 python3 app.py
+```
+
+```powershell
+# Windows — just run start_server.bat, or manually:
+cd pulsewatch_backend
+.venv\Scripts\activate
+python app.py
 ```
 
 Then refresh `http://localhost:5001/qr` in your browser — it will show the new QR with the updated IP.

@@ -32,11 +32,11 @@ function saveData() {
     var filename = "pw" + timestamp + ".csv";
     
     var file = require("Storage").open(filename, "w");
-    file.write("timestamp,bpm,confidence,accel_x,accel_y,accel_z\n");
+    file.write("timestamp,bpm,rr_interval_ms,confidence,accel_x,accel_y,accel_z\n");
     
     for (var i = 0; i < dataBuffer.length; i++) {
       var d = dataBuffer[i];
-      file.write(d.t + "," + d.b + "," + d.c + "," + 
+      file.write(d.t + "," + d.b + "," + d.r + "," + d.c + "," + 
                  d.x + "," + d.y + "," + d.z + "\n");
     }
     
@@ -71,6 +71,9 @@ function onHRM(hrm) {
     t: timestamp,
     b: hrm.bpm || 0,
     c: hrm.confidence || 0,
+    r: (Array.isArray(hrm.rr) && hrm.rr.length > 0)
+       ? Math.round(hrm.rr[0])
+       : (hrm.rr || 0),
     x: Math.round(accel.x * 1000),
     y: Math.round(accel.y * 1000),
     z: Math.round(accel.z * 1000)
@@ -81,7 +84,7 @@ function onHRM(hrm) {
 
   // 📡 SEND LIVE DATA OVER BLUETOOTH via Nordic UART Service
   try {
-    var line = data.t + "," + data.b + "," + data.c + "," +
+    var line = data.t + "," + data.b + "," + data.r + "," + data.c + "," +
                data.x + "," + data.y + "," + data.z;
     Bluetooth.println(line);
 
