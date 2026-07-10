@@ -42,9 +42,6 @@ dependencies:
   # Icons
   cupertino_icons: ^1.0.8
 
-  # ananymous ID generation
-  crypto: ^3.0.3
-
   mobile_scanner: ^5.2.3
 
   # mDNS service discovery (find server on local network without knowing IP)
