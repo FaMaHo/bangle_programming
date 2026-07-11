@@ -15,6 +15,7 @@ Background heart rate and motion data collector for cardiovascular disease resea
 
 PulseWatch runs silently in the background and collects:
 - Heart rate (BPM)
+- Beat-to-beat RR interval (ms), when the HRM sensor reports one
 - HRM confidence score
 - 3-axis accelerometer (X, Y, Z)
 - Timestamps for each reading
@@ -24,11 +25,14 @@ Data is saved as CSV files in Storage with format: `pwXXXXXXXXXX.csv`
 ## Data Format
 
 ```csv
-timestamp,bpm,confidence,accel_x,accel_y,accel_z
-1702396800123,72,85,100,-50,980
-1702396801123,73,88,105,-48,975
+timestamp,bpm,rr_interval_ms,confidence,accel_x,accel_y,accel_z
+1702396800123,72,833,85,100,-50,980
+1702396801123,73,822,88,105,-48,975
 ...
 ```
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how recording start/stop, the
+widget, and BLE streaming actually fit together.
 
 ## For Developers
 

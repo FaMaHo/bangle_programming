@@ -1,10 +1,10 @@
 # PulseWatch AI
 
-**AI Bracelet for Early Detection of Heart Sclerosis**  
+**AI Bracelet for Early Detection of Heart Sclerosis**
 A wearable system for preventive cardiac monitoring.
 
-Academic project — Faculty of Engineering in Foreign Languages (FILS), NUST Politehnica Bucharest  
-Authors: Mahmoudzadehosseini FatemehSadat · Daria Gladkykh  
+Academic project — Faculty of Engineering in Foreign Languages (FILS), NUST Politehnica Bucharest
+Authors: Mahmoudzadehosseini FatemehSadat · Daria Gladkykh
 Supervisor: Prof. Dr. Ing. Nicolae Goga
 
 ---
@@ -15,7 +15,7 @@ Supervisor: Prof. Dr. Ing. Nicolae Goga
 2. [System Architecture](#system-architecture)
 3. [What Is Currently Working](#what-is-currently-working)
 4. [Setup Guide](#setup-guide)
-5. [Next Steps (Planned)](#next-steps-planned)
+5. [Where Things Live](#where-things-live)
 6. [Future Research Suggestions](#future-research-suggestions)
 
 ---
@@ -24,7 +24,7 @@ Supervisor: Prof. Dr. Ing. Nicolae Goga
 
 PulseWatch AI continuously monitors heart rate and motion data through a Bangle.js 2 smartwatch, transfers that data to a Flutter mobile app via Bluetooth, and uploads it to a research server for cardiovascular analysis. The goal is early detection of heart sclerosis (cardiosclerosis) — a condition that advances silently for years before clinical symptoms appear.
 
-The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs on the researcher's machine and produces a 0–1 risk probability from 48-hour recordings.
+The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs on the researcher's machine and produces a 0–1 risk probability from 48-hour recordings. A lighter version of the same feature pipeline also runs on-device in the app for a live risk estimate.
 
 ---
 
@@ -32,28 +32,33 @@ The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs
 
 ```
 Bangle.js 2 Watch
-  └─ PPG + Accelerometer at ~1 Hz
-  └─ Buffers CSV in flash memory
-  └─ Streams live data via BLE Nordic UART
+  └─ PPG (HRM) + Accelerometer, continuous while recording
+  └─ Buffers CSV in flash memory, saved every 5 minutes
+  └─ Streams live data over BLE (Nordic UART), batched every 15s
         │
         ▼ Bluetooth Low Energy
-Flutter Mobile App (Android / iOS)
-  └─ Receives and stores data in SQLite
-  └─ Shows heart rate stats on Today screen
-  └─ Exports anonymized CSV (last 48 hours)
-  └─ Uploads to research server via HTTP
+Flutter Mobile App (Android — iOS not yet supported, see below)
+  └─ Account: enrollment code (one-time) or username/password login
+  └─ Receives live BLE data, stores in local SQLite
+  └─ Computes an on-device risk estimate from rolling HRV features
+  └─ Shows Home dashboard, Insights, Device, Upload, Settings screens
+  └─ Optional biometric/PIN app-lock
+  └─ Exports anonymized CSV (last 48 hours) and uploads over HTTPS
         │
-        ▼ HTTP POST (same WiFi network)
-Flask Backend Server (researcher's laptop)
+        ▼ HTTPS (JWT-authenticated) — works over any internet connection
+Flask Backend — always-on VPS at pulsana.org
+  └─ Patient/researcher accounts (SQLite, password-hashed)
   └─ Stores CSVs in patient_data/{patient_id}/{session_id}/
-  └─ Serves QR code page for easy connection
-  └─ Health check endpoint
+  └─ Website: patient consent + enrollment-code signup, APK download,
+     researcher login portal (list patients, generate codes, download data)
         │
         ▼ Manual step (researcher)
 XGBoost AI Model
-  └─ Feature extraction (HRV, PPG morphology, activity, nocturnal)
+  └─ Feature extraction (HRV time/frequency-domain, PPG morphology, activity, nocturnal)
   └─ Outputs risk probability + Markdown report
 ```
+
+The backend used to run on a researcher's laptop, reachable only over the same WiFi network as the patient, with a QR code to pair the app to whatever IP the laptop had that day. It's now a normal always-on server at a fixed domain — patients don't need to be anywhere near the researcher, and there's no pairing dance.
 
 ---
 
@@ -61,56 +66,67 @@ XGBoost AI Model
 
 ### Bangle.js 2 Firmware (`bangle/`)
 
-- Background heart rate monitoring using the onboard HRM sensor
+- Background heart rate monitoring using the onboard HRM sensor, including real beat-to-beat RR intervals (not just averaged BPM)
 - 3-axis accelerometer recording (Kionix KX022)
-- Data buffered in flash as timestamped CSV files (`pw*.csv`)
-- Files saved every 5 minutes automatically
-- Live data streamed over BLE Nordic UART service on each HRM event
+- Data buffered in flash as timestamped CSV files (`pw*.csv`), saved every 5 minutes
+- Live data streamed over BLE (Nordic UART), batched into one transmission every 15 seconds instead of one per sample — cuts radio wake-ups roughly 15x for battery life, with no loss of data fidelity (flash still captures every sample)
 - Auto-starts recording on watch boot if enabled in settings
 - Control menu in the watch launcher: toggle recording, view status, delete data
 - Green dot widget in top-right corner shows recording is active
-- Data format: `timestamp, bpm, confidence, accel_x, accel_y, accel_z`
+- Data format: `timestamp, bpm, rr_interval_ms, confidence, accel_x, accel_y, accel_z`
+
+See [`bangle/ARCHITECTURE.md`](bangle/ARCHITECTURE.md) for details.
 
 ### Flutter Mobile App (`pulsewatch_app/`)
 
 **Screens:**
 
-- **Today** — shows today's heart rate stats (min, avg, max), total readings, signal score, and live connection status when watch is paired
-- **Insights** — weekly day-by-day data presence indicator, 7-day heart rate averages, data quality progress bar
-- **Device** — BLE scan and connect to Bangle.js 2 or T-Watch S3 Plus; Bangle.js always appears first in scan results; auto-starts recording on connection; shows "Data streaming automatically" when connected
-- **Upload** — anonymized data export and upload to research server
+- **Home** — dashboard: watch connection status (tap to go connect it), 48-hour data-collection progress, live heart rate with real signal-quality percentage from the watch's HRM confidence, cardiac risk gauge, and a nudge if there's unsynced data waiting to be uploaded
+- **Insights** — weekly day-by-day data presence, 7-day heart rate stats plus average signal quality, days-recorded progress
+- **Device** — BLE scan and connect to Bangle.js 2 or T-Watch S3 Plus; Bangle.js always appears first; auto-starts recording on connection; real signal-quality reading (not a made-up score)
+- **Upload** — anonymized data export and upload to the research server, with a consent screen before every upload
+- **Settings** — account info, log out, biometric/PIN app-lock toggle (separated out from the Upload page, which used to hold all of this)
 
-**Profile & Privacy:**
+**Accounts & Privacy:**
 
-- First-launch profile setup (name, birth year, biological sex)
-- Anonymous patient ID generated from profile (format: `P-XXXX-YYYY`) — real name is never exported or transmitted
-- Profile stored locally only
+- No self-registration: a researcher (or the website's consent flow) issues a one-time enrollment code, which also mints a fresh, unguessable `patient_id` (e.g. `P-9ADF8CE5`) server-side
+- Patient picks a username and password once, then logs in normally after that
+- No real name, birth year, or biological sex is collected anywhere anymore — the old profile-setup screen that did this was removed since nothing downstream (the model, the export) actually used that data
+- Tokens stored via `flutter_secure_storage` (Keychain/Keystore-backed), not plain SharedPreferences
+- Optional biometric/device-PIN app-lock, re-locks whenever the app leaves the foreground
 
 **BLE Integration:**
 
-- Connects to Bangle.js 2 via Nordic UART Service
-- Receives live CSV lines from watch and stores directly to SQLite
+- Connects to Bangle.js 2 via Nordic UART Service; reassembles data that arrives split across multiple BLE packets before parsing it (a single CSV line is often longer than one packet)
 - Sends `require("pulsewatch").start()` command on connection to auto-start recording
-- Also supports T-Watch S3 Plus via custom BLE service
+- Also supports T-Watch S3 Plus via a custom BLE service
 - Bangle.js automatically sorted to top of scan results list
 
 **Data Export & Upload:**
 
-- Exports last 48 hours as anonymized CSV: `timestamp, hr_bpm, accel_x, accel_y, accel_z`
+- Exports last 48 hours as anonymized CSV: `timestamp, hr_bpm, rr_intervals_ms, accel_x, accel_y, accel_z`
 - `device_id` and `confidence` columns intentionally excluded from export
 - Consent bottom sheet before every upload — shows exactly what will be sent, requires explicit checkbox confirmation
-- QR code scanning to connect to server — no manual IP typing required
-- Auto-tests connection immediately after QR scan
-- Sends `X-Patient-ID` and `X-Session-ID` headers; no `X-Device-ID`
+- Uploads authenticate with a JWT bearer token (not a client-supplied patient ID header, which could previously be spoofed)
 
-### Flask Backend Server (`pulsewatch_backend/`)
+See [`pulsewatch_app/ARCHITECTURE.md`](pulsewatch_app/ARCHITECTURE.md) for details.
 
-- `/upload` — receives CSV, saves to `patient_data/{patient_id}/{session_id}/`
-- `/health` — health check (used by app to test connection)
-- `/qr` — serves an HTML page with a scannable QR code encoding the server's WiFi IP and port; researcher opens this in a browser, patient scans it with the app
-- `/patient/{id}/sessions` — lists all sessions for a patient
-- `/patient/{id}/session/{id}/data` — returns combined CSV for a session
-- Runs in Docker via `docker-compose`
+### Flask Backend + Website (`pulsewatch_backend/`)
+
+Deployed on a DigitalOcean VPS at **pulsana.org**, behind nginx with a Let's Encrypt TLS certificate, running under systemd (gunicorn).
+
+**API (used by the app):**
+- `/auth/claim`, `/auth/login`, `/auth/refresh`, `/auth/enroll` — accounts and JWT tokens
+- `/upload`, `/upload_chunk`, `/upload_recorder_log` — receive CSV data (patient identity comes from the verified token, never a client-supplied header)
+- `/patient/{id}/sessions`, `/patient/{id}/session/{id}/data` — read back a patient's data (patient can only read their own; researcher role can read any)
+- `/health` — health check
+
+**Website (server-rendered, no separate frontend framework):**
+- `/` — landing page
+- `/download` — consent/terms page → issues a one-time enrollment code → links to the Android APK
+- `/researcher/login`, `/researcher/dashboard`, `/researcher/patient/{id}` — session-cookie-based researcher portal: list patients, generate enrollment codes, download session CSVs
+
+See [`pulsewatch_backend/ARCHITECTURE.md`](pulsewatch_backend/ARCHITECTURE.md) for details, including how to run it locally and how it's deployed.
 
 ### AI Model (separate — not in this repo)
 
@@ -119,6 +135,7 @@ XGBoost AI Model
 - Performance: Accuracy 0.85, AUC 0.91, Brier Score 0.082, Specificity 0.87
 - Extracts 20 features across 5-minute windows: HRV time-domain, HRV frequency-domain, PPG morphology, activity, nocturnal
 - Outputs a 0–1 risk probability and Markdown report
+- Training/evaluation/conversion scripts for this model live in `models/`, separate from the app's on-device ONNX copy in `pulsewatch_app/assets/models/`
 
 ---
 
@@ -126,19 +143,14 @@ XGBoost AI Model
 
 ### Prerequisites
 
-- macOS, Windows, or Ubuntu laptop (the research server machine)
-- Python 3.10+
-- Docker Desktop (optional — see backend setup below for a no-Docker option)
+- macOS, Windows, or Linux (for app/firmware development)
 - Flutter SDK 3.x
-- Android phone (tested on Samsung S908B) or iOS device
+- Android phone or emulator (tested on Samsung S908B) — **iOS is not currently supported**, see below
 - Bangle.js 2 smartwatch
+- Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) (only needed if you're running your own backend instead of using the hosted one)
 
-> **Building for iOS:** requires Xcode, which only runs on macOS. If you're
-> developing from Windows or Linux, the Android side of the app works
-> exactly the same as on macOS, but iOS builds/testing need a physical Mac,
-> a cloud Mac, or a macOS CI runner — there's no Windows workaround for this.
-
----
+> **iOS:** the app currently only targets Android. Building for iOS would additionally
+> require Xcode (macOS only) and hasn't been set up/tested.
 
 ### 1. Clone the Repository
 
@@ -146,8 +158,6 @@ XGBoost AI Model
 git clone https://github.com/FaMaHo/bangle_programming.git
 cd bangle_programming
 ```
-
----
 
 ### 2. Set Up the Watch Firmware
 
@@ -162,191 +172,89 @@ cd bangle_programming
 5. On the watch, go to Settings → enable recording via the PulseWatch menu
 6. The green dot widget confirms recording is active
 
----
-
-### 3. Set Up the Backend Server
-
-**macOS / Linux — install Python dependencies:**
-
-```bash
-cd pulsewatch_backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-**Windows — install Python dependencies:**
-
-```powershell
-cd pulsewatch_backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Or just run `pulsewatch_backend\setup_windows.bat`, which installs dependencies
-and opens the Windows Firewall port for you.
-
-**Build and start with Docker (macOS / Linux):**
-
-```bash
-# Get your laptop's WiFi IP first
-python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()"
-
-# Start with your real IP injected (replace 192.168.x.x with your actual IP)
-HOST_IP=192.168.x.x docker-compose up -d
-```
-
-**Or run without Docker (simpler for testing):**
-
-```bash
-# macOS / Linux
-cd pulsewatch_backend
-source .venv/bin/activate
-python3 app.py
-
-# Windows
-cd pulsewatch_backend
-.venv\Scripts\activate
-python app.py
-```
-
-On Windows you can also just double-click (or run) `start_server.bat` —
-it detects your LAN IP and starts the server in one step. See
-[`docs/WINDOWS_SERVER_DEPLOYMENT.md`](docs/WINDOWS_SERVER_DEPLOYMENT.md)
-for a full Docker-based Windows deployment guide (firewall rules, tunnels,
-auto-start on boot, etc.).
-
-**Verify it works:**
-
-```bash
-curl http://localhost:5001/health
-# Should return: {"status": "healthy", ...}
-```
-
-**Generate the QR code for patients:**
-
-Open in your browser: `http://localhost:5001/qr`
-
-This page shows a QR code with your laptop's WiFi IP encoded. Show it to the patient — they scan it from the app.
-
-> **Important:** Your laptop and the patient's phone must be on the **same WiFi network**. Personal hotspot does not work.
-
----
-
-### 4. Set Up the Flutter App
-
-**Install dependencies:**
+### 3. Set Up the Flutter App
 
 ```bash
 cd pulsewatch_app
 flutter pub get
-```
-
-**Run on your Android device:**
-
-```bash
 flutter run
 ```
 
+The app talks to the production backend at `https://pulsana.org` by default — no server setup needed to try it. To point it at your own backend instead, change `_defaultServerUrl` in `lib/services/server_service.dart`, or set the server URL from the Upload screen at runtime.
+
 **First launch:**
+- You'll be asked for an enrollment code (get one from `https://pulsana.org/download`, or have a researcher generate one from the portal) plus a username and password you choose
+- Returning users just log in with that username/password
 
-- The app will open a profile setup screen
-- Enter name, birth year, and biological sex
-- An anonymous research ID is generated (e.g. `P-A3F2-1990`) — this is what appears in uploaded data, never the real name
+**Connect the watch:**
+1. Go to the **Device** tab → **Scan for Devices**
+2. Bangle.js appears at the top with a green border → **Connect**
+3. Recording starts automatically
 
-**Connect to the server:**
+### 4. Running Your Own Backend (optional)
 
-1. Go to the **Upload** tab
-2. Tap the QR scan icon (green camera icon next to the URL field)
-3. Scan the QR code from `http://localhost:5001/qr`
-4. The app connects automatically
-
-**Connect to the watch:**
-
-1. Go to the **Device** tab
-2. Tap **Scan for Devices**
-3. Bangle.js will appear at the top of the list with a green border
-4. Tap **Connect** — the watch starts recording automatically
-
----
-
-### 5. Starting the Server After Laptop Restart
-
-Your WiFi IP may change each time you reconnect. Always start the server with the current IP:
+Only needed if you don't want to use the hosted `pulsana.org` instance — e.g. for local development.
 
 ```bash
-# macOS / Linux
 cd pulsewatch_backend
-source .venv/bin/activate
-
-# Option A: Docker
-HOST_IP=$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()") docker-compose up -d
-
-# Option B: Direct Python (simpler)
-python3 app.py
-```
-
-```powershell
-# Windows — just run start_server.bat, or manually:
-cd pulsewatch_backend
-.venv\Scripts\activate
+uv venv
+# macOS/Linux: source .venv/bin/activate   |   Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
 python app.py
 ```
 
-Then refresh `http://localhost:5001/qr` in your browser — it will show the new QR with the updated IP.
+Then create a researcher account with `python create_admin.py`, and see [`pulsewatch_backend/ARCHITECTURE.md`](pulsewatch_backend/ARCHITECTURE.md) for the full route list, the auth model, and how the production deployment (nginx + systemd + Let's Encrypt) is set up.
 
----
+### 5. Collecting and Downloading Research Data
 
-### 6. Collecting and Downloading Research Data
+As a researcher, log into `https://pulsana.org/researcher/login`, or use the API directly:
 
-Data is stored in `pulsewatch_backend/patient_data/{patient_id}/{session_id}/`.
-
-To list all sessions for a patient:
 ```bash
-curl http://localhost:5001/patient/P-A3F2-1990/sessions
-```
-
-To download combined CSV for a session:
-```bash
-curl http://localhost:5001/patient/P-A3F2-1990/session/session-xxx/data
+curl -H "Authorization: Bearer <your_access_token>" https://pulsana.org/patient/P-XXXXXXXX/sessions
+curl -H "Authorization: Bearer <your_access_token>" https://pulsana.org/patient/P-XXXXXXXX/session/<session_id>/data
 ```
 
 ---
 
-## Next Steps (Planned)
+## Where Things Live
 
-### Auto-send data on app resume
-Instead of requiring the user to manually tap "Export & Upload", the app will silently upload whenever it is opened, if more than 6 hours have passed since the last upload and the server URL is configured. This requires no background permissions and works reliably on both Android and iOS.
-
-Files to change: `main.dart`, `server_service.dart`, `server_screen.dart`
-
-### Manager dashboard (web UI)
-A password-protected web page served directly from Flask at `/dashboard`. Shows a table of all patients, their sessions, record counts, and last upload time. Each row has a Download CSV button. Login with a hardcoded password (`admin1234`). No new framework needed — pure HTML served inline from Flask.
-
-Files to change: `app.py` only
-
-### `start_server.sh` helper script
-A one-line shell script at the repo root that detects the current WiFi IP and starts the server with the correct `HOST_IP` injected. Saves the step of running the Python IP command manually every time.
+| Folder | What's in it | Details |
+|---|---|---|
+| `bangle/` | Bangle.js 2 firmware (Espruino/JS) | [`ARCHITECTURE.md`](bangle/ARCHITECTURE.md) |
+| `pulsewatch_app/` | Flutter mobile app | [`ARCHITECTURE.md`](pulsewatch_app/ARCHITECTURE.md) |
+| `pulsewatch_backend/` | Flask API + website, deployed to `pulsana.org` | [`ARCHITECTURE.md`](pulsewatch_backend/ARCHITECTURE.md) |
+| `models/` | AI model training/evaluation/conversion scripts (XGBoost + ONNX/TFLite export) | — |
+| `firmware/` | T-Watch S3 Plus firmware (secondary/experimental device) | — |
+| `docs/` | Historical design docs, hardware reference PDFs, deployment notes | — |
+| `server/` | Early prototype backend, superseded by `pulsewatch_backend/` — kept for reference, not active | — |
 
 ---
 
 ## Future Research Suggestions
 
-**On-device inference**
-Run the XGBoost model (converted to TensorFlow Lite Micro) directly on the Bangle.js 2. This would give patients a risk indicator on the watch face without needing to export data to a laptop. Requires significant model compression and TFLite Micro integration with Espruino.
+**PPG morphology features**
+Two of the model's features (`systolic_upslope`, `diastolic_decay` — a combined ~14% of feature importance) need raw PPG waveform samples, which the current firmware doesn't expose (only derived BPM/confidence/RR). Getting real values here instead of training-set-mean placeholders would need firmware changes to stream raw PPG, which the Bangle.js HRM API may or may not support — worth investigating.
 
-**RR interval collection**
-The current firmware collects BPM (averaged heart rate) rather than raw RR intervals (beat-to-beat timing). Switching to `Bangle.setHRMPower(1)` with raw PPG processing would give true RR intervals, which are the foundation of all HRV metrics. This would make the HRV features computed in the app and AI model substantially more accurate.
+**HRM duty-cycling for battery**
+The HRM sensor currently runs continuously while recording (needed for real HRV). Duty-cycling it (e.g. 10 minutes on, out of every 30) could meaningfully extend battery life, but trades off against data continuity and overnight/nocturnal-feature coverage — a product decision, not just an engineering one.
+
+**iOS support**
+The app is Android-only today. Bringing up iOS needs Xcode/macOS for builds, an Apple Developer account for any real distribution (TestFlight or App Store), and testing the BLE/biometric-lock/secure-storage code paths on iOS.
+
+**Play Store distribution**
+Currently distributed as a direct APK download (with the "unknown sources" install warning that implies). Moving to the Play Store would need a proper `applicationId` (currently the Flutter default `com.example.pulsewatch_app`), a Play Console account, and a release/versioning workflow.
+
+**Real informed-consent text**
+The website's `/download` consent page ships with placeholder text — needs the actual IRB-approved consent language before real participants use it.
+
+**On-device inference**
+Run the XGBoost model (converted to TensorFlow Lite Micro) directly on the Bangle.js 2, for a risk indicator on the watch face itself. Requires significant model compression and TFLite Micro integration with Espruino.
 
 **Database encryption**
-The article describes encrypted SQLite storage. The current implementation uses plain `sqflite`. Adding SQLCipher via the `sqflite_sqlcipher` package would make the local database match the privacy guarantees described in the paper.
-
-**HRV computation in the app**
-Currently the app shows min/avg/max heart rate. The article describes computing RMSSD, SDNN, pNN50, and LF/HF ratio from 5-minute windows in the app itself. Adding this would make the Insights screen clinically meaningful and remove the dependency on the researcher running the AI model for basic feedback.
+Local SQLite storage on the phone is currently unencrypted (`sqflite`, not `sqflite_sqlcipher`). Would need adding SQLCipher to match the privacy guarantees described in the project's write-up.
 
 **Prospective clinical validation**
-The current proof-of-concept used simulated data. The next scientific step is collecting data from participants with confirmed clinical diagnoses, validated by a cardiologist, to quantify how well the system performs on real Bangle.js PPG signals (which differ from the ECG-derived training data).
+The current proof-of-concept used simulated/pilot data. The next scientific step is collecting data from participants with confirmed clinical diagnoses, validated by a cardiologist, to quantify how well the system performs on real Bangle.js PPG signals (which differ from the ECG-derived training data).
 
 **Multi-class severity grading**
 The current model is binary (Healthy / Cardiac). Extending to multi-class would allow Low / Medium / High / Critical risk levels, giving more actionable output for clinical screening.
