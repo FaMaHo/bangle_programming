@@ -114,16 +114,34 @@ def claim_enrollment_code(code, username, password):
         if existing is not None:
             return None, 'That username is already taken'
 
+        # The checks above aren't atomic with the writes below, so two
+        # concurrent claims (e.g. of the same code) can both pass them.
+        # Guard the writes themselves rather than trusting the checks:
+        # patient_id/username collisions surface as IntegrityError, and the
+        # UPDATE below only "wins" the code for one of the two INSERTs.
         password_hash = generate_password_hash(password)
-        cursor = db.execute(
-            'INSERT INTO users (username, password_hash, role, patient_id, created_at) '
-            'VALUES (?, ?, ?, ?, ?)',
-            (username, password_hash, 'patient', row['patient_id'], _now().isoformat()),
-        )
-        db.execute(
-            'UPDATE enrollment_codes SET used_by_user_id = ? WHERE code = ?',
+        try:
+            cursor = db.execute(
+                'INSERT INTO users (username, password_hash, role, patient_id, created_at) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (username, password_hash, 'patient', row['patient_id'], _now().isoformat()),
+            )
+        except sqlite3.IntegrityError as e:
+            if 'users.username' in str(e):
+                return None, 'That username is already taken'
+            return None, 'This code has already been used'
+
+        claimed = db.execute(
+            'UPDATE enrollment_codes SET used_by_user_id = ? '
+            'WHERE code = ? AND used_by_user_id IS NULL',
             (cursor.lastrowid, code),
         )
+        if claimed.rowcount == 0:
+            # Someone else claimed this code in the window between our
+            # check and this write — undo the user row we just created.
+            db.execute('DELETE FROM users WHERE id = ?', (cursor.lastrowid,))
+            return None, 'This code has already been used'
+
         user = db.execute(
             'SELECT * FROM users WHERE id = ?', (cursor.lastrowid,)
         ).fetchone()

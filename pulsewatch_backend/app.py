@@ -36,10 +36,18 @@ from flask_jwt_extended import (
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import auth as accounts
 
 app = Flask(__name__)
+
+# Production runs behind nginx (see ARCHITECTURE.md), which sets
+# X-Forwarded-For/-Proto/-Host. Without ProxyFix, request.remote_addr (and
+# therefore every IP-based rate limit below) resolves to nginx's own
+# loopback address for every visitor, collapsing all clients into one
+# shared limiter bucket instead of one bucket per real client.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 UPLOAD_FOLDER = 'patient_data'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
