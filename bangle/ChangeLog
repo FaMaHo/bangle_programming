@@ -1,3 +1,11 @@
+0.05: Persist recording flag on start()/stop() (2026-07-25)
+- FIXED: exports.start()/stop() now write recording:true/false to
+  pulsewatch.json, not just the in-memory isRecording flag
+- Previously only the watch's own menu toggle persisted this, so recording
+  triggered remotely by the phone (BLE auto-start on connect) never lit the
+  widget's green recording dot, and never auto-resumed after a watch reboot
+  mid-session (boot.js/widget.js only resume based on this persisted flag)
+
 0.04: Fix Timestamp Format + Database Migration (2025-01-12)
 - CRITICAL FIX: Timestamps now integers (Math.floor) instead of floats with decimals
 - Fixes parsing error: "FormatException: Invalid radix-10 number" in Flutter app
