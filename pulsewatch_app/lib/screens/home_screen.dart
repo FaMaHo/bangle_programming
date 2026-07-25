@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/database_helper.dart';
 import '../services/ble_service.dart';
-import '../services/hrv_feature_extractor.dart';
-import '../services/inference_service.dart';
 import '../services/notification_service.dart';
+import '../services/report_service.dart';
 import '../services/server_service.dart';
+import 'report_screen.dart';
 import 'settings_screen.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -15,6 +15,11 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 /// is the watch connected, how much data have we collected toward the
 /// 48h goal, what's the current reading, and is there anything the user
 /// needs to go do (connect the watch, upload data).
+///
+/// The cardiac risk score is only ever computed once, from the full 48h
+/// session (see ReportService) — never from a short live window, which
+/// isn't how the model was trained/evaluated and produced unreliable
+/// high-risk false positives.
 class HomeScreen extends StatefulWidget {
   final void Function(int tabIndex) onNavigateToTab;
 
@@ -39,17 +44,12 @@ class _HomeScreenState extends State<HomeScreen>
   int _latestConfidence = 0;
   int _coverageHours = 0; // distinct hours with data in the last 48h
   bool _needsUpload = false;
-  double _riskScore = -1.0;
-  DateTime? _lastEvalTime;
   int _liveRecordsReceived = 0;
 
   static const _collectionGoalHours = 48;
 
-  final List<BpmSample> _bpmBuffer = [];
-  bool _evaluating = false;
-  static const _windowDuration = Duration(minutes: 5);
-  static const _minSamplesForRisk = 300;
-  static const _evalCooldown = Duration(minutes: 2);
+  FinalReport? _report;
+  bool _generatingReport = false;
 
   late AnimationController _heartAnimController;
   late Animation<double> _heartScaleAnim;
@@ -88,7 +88,6 @@ class _HomeScreenState extends State<HomeScreen>
             _liveBpm = 0;
             _liveRecordsReceived = 0;
             _heartBeatTimer?.cancel();
-            _bpmBuffer.clear();
           }
         });
       }
@@ -102,56 +101,22 @@ class _HomeScreenState extends State<HomeScreen>
       final bpm = sample.bpm.round();
       if (mounted) setState(() => _liveBpm = bpm);
       _resetHeartTimer(bpm);
-
-      _bpmBuffer.add(sample);
-      final cutoff = DateTime.now().subtract(_windowDuration);
-      _bpmBuffer.removeWhere((s) => s.time.isBefore(cutoff));
-
-      if (_bpmBuffer.length >= _minSamplesForRisk && !_evaluating) {
-        final now = DateTime.now();
-        if (_lastEvalTime == null || now.difference(_lastEvalTime!) >= _evalCooldown) {
-          _evaluateRisk();
-        }
-      }
     });
   }
 
-  Future<void> _evaluateRisk() async {
-    if (_evaluating) return;
-    _evaluating = true;
-    _lastEvalTime = DateTime.now();
-    try {
-      // Use live buffer if full; otherwise fall back to last 300 DB records.
-      List<BpmSample> window = List.from(_bpmBuffer);
-      if (window.length < _minSamplesForRisk) {
-        final rows = await _db.getRecentHRWithAccel(_minSamplesForRisk);
-        if (rows.length < HrvFeatureExtractor.minSamples) return;
-        window = rows.map((r) => BpmSample(
-          time: DateTime.fromMillisecondsSinceEpoch(r['timestamp'] as int),
-          bpm:  (r['bpm'] as num).toDouble(),
-          ax:   (r['x']   as num).toDouble(),
-          ay:   (r['y']   as num).toDouble(),
-          az:   (r['z']   as num).toDouble(),
-          rr:   (r['rr']  as num).toDouble(),
-        )).toList();
-      }
-      final features = HrvFeatureExtractor.compute(window);
-      // Overlay nocturnal features from DB (replaces training-mean defaults).
-      // PPG morphology features remain at training means — hardware calibration needed.
-      final nocturnal = await HrvFeatureExtractor.computeNocturnal(_db);
-      features['nocturnal_hr_mean']        = nocturnal['nocturnal_hr_mean']!;
-      features['hrv_circadian_amplitude']  = nocturnal['hrv_circadian_amplitude']!;
-      features['sleep_fragmentation_index'] = nocturnal['sleep_fragmentation_index']!;
-      final score = await InferenceService.getRiskScore(features);
-      final src = _bpmBuffer.length >= _minSamplesForRisk ? 'live' : 'db';
-      print('[InferenceService] risk=${score.toStringAsFixed(3)}  source=$src  samples=${window.length}');
-      if (!mounted) return;
-      setState(() => _riskScore = score);
-      await NotificationService.sendRiskAlert(score);
-      if (score > 0.93) await _bleService.sendRiskAlarm();
-    } finally {
-      _evaluating = false;
-    }
+  /// Kicks off the one-time full-session report once 48h of data has been
+  /// collected. No-op if a report already exists or is already generating.
+  Future<void> _maybeGenerateReport() async {
+    if (_report != null || _generatingReport) return;
+    if (_coverageHours < _collectionGoalHours) return;
+
+    setState(() => _generatingReport = true);
+    final report = await ReportService.computeReport(_db);
+    if (!mounted) return;
+    setState(() {
+      _generatingReport = false;
+      if (report != null) _report = report;
+    });
   }
 
   void _resetHeartTimer(int bpm) {
@@ -184,9 +149,14 @@ class _HomeScreenState extends State<HomeScreen>
         _coverageHours = coverage.length;
         _needsUpload = needsUpload;
       });
-      // Score from stored data as soon as app opens, if no live score yet.
-      if (_riskScore < 0 && total >= HrvFeatureExtractor.minSamples && !_evaluating) {
-        _evaluateRisk();
+    }
+
+    if (_report == null && !_generatingReport) {
+      final cached = await ReportService.loadCachedReport();
+      if (cached != null) {
+        if (mounted) setState(() => _report = cached);
+      } else {
+        await _maybeGenerateReport();
       }
     }
   }
@@ -202,16 +172,26 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
-  Color _riskColor(double score) {
-    if (score < 0.35) return AppColors.primaryGreen;
-    if (score < 0.65) return AppColors.warning;
-    return AppColors.error;
+  Color _riskColor(String level) {
+    switch (level) {
+      case 'LOW':
+        return AppColors.primaryGreen;
+      case 'MEDIUM':
+        return AppColors.warning;
+      default:
+        return AppColors.error;
+    }
   }
 
-  String _riskLabel(double score) {
-    if (score < 0.35) return 'Low Risk';
-    if (score < 0.65) return 'Moderate';
-    return 'High Risk';
+  String _riskLabel(String level) {
+    switch (level) {
+      case 'LOW':
+        return 'Low Risk';
+      case 'MEDIUM':
+        return 'Moderate';
+      default:
+        return 'High Risk';
+    }
   }
 
   String _heartZone(int bpm) {
@@ -246,9 +226,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    final bool hasRisk = _riskScore >= 0;
     final bool hasData = _totalReadings > 0 || _avgHR > 0;
-    final int bufferCount = _bpmBuffer.length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20.0),
@@ -282,7 +260,7 @@ class _HomeScreenState extends State<HomeScreen>
           ],
 
           // ── HERO RISK CARD ───────────────────────────────────────────────
-          _buildRiskHeroCard(hasRisk, bufferCount),
+          _buildRiskHeroCard(),
           const SizedBox(height: 16),
 
           // ── 48H COLLECTION PROGRESS ──────────────────────────────────────
@@ -449,19 +427,24 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildRiskHeroCard(bool hasRisk, int bufferCount) {
-    // State 1: no watch connected, no prior score
-    if (!_isConnected && !hasRisk) {
+  Widget _buildRiskHeroCard() {
+    // State 1: report ready — compact summary + link to the full report
+    if (_report != null) {
+      return _buildReportReadyCard(_report!);
+    }
+
+    // State 2: 48h reached, report not computed yet
+    if (_coverageHours >= _collectionGoalHours || _generatingReport) {
+      return _buildGeneratingCard();
+    }
+
+    // State 3: not connected, nothing collected yet
+    if (!_isConnected && _totalReadings == 0) {
       return _buildConnectPromptCard();
     }
 
-    // State 2: connected, still collecting enough data
-    if (_isConnected && !hasRisk && bufferCount < _minSamplesForRisk) {
-      return _buildCollectingCard(bufferCount);
-    }
-
-    // State 3: has a risk score — show the gauge
-    return _buildRiskGaugeCard(hasRisk ? _riskScore : 0.0, bufferCount);
+    // State 4: still collecting toward the 48h goal
+    return _buildCollectingCard();
   }
 
   Widget _buildConnectPromptCard() {
@@ -501,7 +484,8 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           const SizedBox(height: 8),
           const Text(
-            'Connect your watch to start monitoring.\nA risk score appears after 5 minutes of data.',
+            'Connect your watch to start monitoring.\nYour full cardiac risk report becomes available '
+            'after 48 hours of continuous data collection.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
           ),
@@ -510,8 +494,8 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildCollectingCard(int bufferCount) {
-    final progress = bufferCount / _minSamplesForRisk;
+  Widget _buildCollectingCard() {
+    final progress = (_coverageHours / _collectionGoalHours).clamp(0.0, 1.0);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
@@ -545,11 +529,11 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Cardiac Risk Assessment',
+                      'Cardiac Risk Report',
                       style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
                     Text(
-                      'Collecting HRV data…',
+                      'Collecting data…',
                       style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ],
@@ -572,7 +556,7 @@ class _HomeScreenState extends State<HomeScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '$bufferCount / $_minSamplesForRisk readings',
+                '$_coverageHours / $_collectionGoalHours hours',
                 style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
               ),
               Text(
@@ -585,15 +569,55 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          const Text(
+            'Your risk score is only computed once, from the full 48-hour '
+            'session — this matches how the model was trained and evaluated.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 11, height: 1.4),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildRiskGaugeCard(double score, int bufferCount) {
-    final color = _riskColor(score);
-    final label = _riskLabel(score);
-    final pct = (score * 100).round();
+  Widget _buildGeneratingCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          const CircularProgressIndicator(color: AppColors.primaryGreen),
+          const SizedBox(height: 18),
+          const Text(
+            'Generating Your Report',
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '48 hours of data collected — scoring your full session now.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReportReadyCard(FinalReport report) {
+    final color = _riskColor(report.riskLevel);
+    final label = _riskLabel(report.riskLevel);
+    final pct = (report.score * 100).round();
 
     return Container(
       width: double.infinity,
@@ -617,7 +641,7 @@ class _HomeScreenState extends State<HomeScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Cardiac Risk Assessment',
+                'Cardiac Risk Report',
                 style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 13,
@@ -646,12 +670,10 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Animated arc gauge
           TweenAnimationBuilder<double>(
-            key: ValueKey(score),
-            tween: Tween(begin: 0.0, end: score),
+            tween: Tween(begin: 0.0, end: report.score),
             duration: const Duration(milliseconds: 1000),
             curve: Curves.easeOutCubic,
             builder: (context, animated, _) {
-              final animColor = _riskColor(animated);
               return SizedBox(
                 width: 200,
                 height: 130,
@@ -659,7 +681,7 @@ class _HomeScreenState extends State<HomeScreen>
                   painter: _RiskGaugePainter(
                     progress: animated,
                     trackColor: Colors.grey.shade200,
-                    fillColor: animColor,
+                    fillColor: color,
                   ),
                   child: Center(
                     child: Column(
@@ -699,19 +721,28 @@ class _HomeScreenState extends State<HomeScreen>
               Icon(Icons.access_time, size: 12, color: AppColors.textSecondary),
               const SizedBox(width: 4),
               Text(
-                _lastEvalTime != null
-                    ? 'Updated ${_formatTime(_lastEvalTime!)}  ·  $bufferCount readings'
-                    : '$bufferCount readings collected',
+                'Generated ${_formatTime(report.computedAt)} · from your full session',
                 style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
               ),
             ],
           ),
 
-          // Evaluation notice
-          const SizedBox(height: 8),
-          Text(
-            'Based on 5-min HRV • re-evaluated every 2 min',
-            style: TextStyle(color: AppColors.textSecondary.withOpacity(0.6), fontSize: 10),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => ReportScreen(report: report)),
+              ),
+              icon: const Icon(Icons.description_outlined, size: 18),
+              label: const Text('View Full Report'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: color,
+                side: BorderSide(color: color.withOpacity(0.4)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
           ),
         ],
       ),

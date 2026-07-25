@@ -2,7 +2,7 @@ name: pulsewatch_app
 description: "PulseWatch AI - Medical Research System for Heart Sclerosis Detection"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+3
 
 environment:
   sdk: ^3.10.1
@@ -52,6 +52,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  sqflite_common_ffi: ^2.3.3
 
 flutter:
   uses-material-design: true
@@ -59,3 +60,4 @@ flutter:
   assets:
     - assets/models/model.onnx
     - assets/models/feature_names.json
+    - assets/models/feature_importance.json
