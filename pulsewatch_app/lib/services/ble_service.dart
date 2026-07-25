@@ -66,6 +66,15 @@ class BleService {
   List<String> _fileList = [];
   int _currentFileIndex = 0;
 
+  // Set while _readNextFileBangle() is waiting on a specific file's content.
+  // The notification listener resolves this the moment it sees that file's
+  // "SYNC_DONE:<filename>" sentinel line (appended after the read command,
+  // see _readNextFileBangle) — this is what lets us know a file's content
+  // has arrived *completely*, instead of guessing with a fixed delay that
+  // could cut off a slow transfer mid-file.
+  String? _expectedSyncFilename;
+  Completer<void>? _fileReceivedCompleter;
+
   // Reassembles complete lines out of BLE notification fragments. A single
   // CSV line (30-40+ chars) routinely exceeds one BLE packet's payload, so
   // notifications cannot be assumed to contain whole lines — without this,
@@ -280,6 +289,27 @@ class BleService {
           line = line.trim();
           if (line.isEmpty) continue;
 
+          // While a file sync is in flight, everything goes to the file
+          // buffer — a file's echoed data rows are byte-for-byte the same
+          // shape as a live sample (7 comma-separated ints), so there is no
+          // reliable way to tell them apart by content alone. Treating some
+          // of them as "live" here is exactly what used to make the file
+          // buffer end up empty (every real data line took the live
+          // fast-path and never reached _receiveBuffer), which made the
+          // fixed-delay-based "is this file done yet" guess in
+          // _readNextFileBangle unverifiable — a real risk now that a
+          // confirmed-complete read is what gates deleting the file off the
+          // watch.
+          if (_isTransferring) {
+            if (_expectedSyncFilename != null &&
+                line == 'SYNC_DONE:$_expectedSyncFilename') {
+              _fileReceivedCompleter?.complete();
+            } else {
+              _receiveBuffer += line + '\n';
+            }
+            continue;
+          }
+
           // 🔍 Try to parse as live CSV data (7 comma-separated integers)
           List<String> parts = line.split(',');
           if (parts.length == 7) {
@@ -307,16 +337,15 @@ class BleService {
                 rr: rrIntervalMs.toDouble(),
               ));
 
-              // Update live count (only if NOT in file-sync mode)
-              if (!_isTransferring) {
-                _totalRecords++;
-                _transferProgressController.add(TransferProgress(
-                  currentFile: 0,
-                  totalFiles: 0,
-                  recordsReceived: _totalRecords,
-                  status: 'Live HR: $bpm BPM • $_totalRecords readings',
-                ));
-              }
+              // A file sync (if any) already took the branch above and
+              // `continue`d, so reaching here always means live streaming.
+              _totalRecords++;
+              _transferProgressController.add(TransferProgress(
+                currentFile: 0,
+                totalFiles: 0,
+                recordsReceived: _totalRecords,
+                status: 'Live HR: $bpm BPM • $_totalRecords readings',
+              ));
               continue; // Skip buffering
             } catch (e) {
               // Not valid live data — might be file content or command echo
@@ -519,42 +548,77 @@ class BleService {
       _completeTransfer('✅ Bangle.js sync complete! $_totalRecords records saved.');
       return;
     }
-    
+
     String filename = _fileList[_currentFileIndex];
     print("📥 Reading file: $filename");
-    
+
     _transferProgressController.add(TransferProgress(
       currentFile: _currentFileIndex + 1,
       totalFiles: _fileList.length,
       recordsReceived: _totalRecords,
       status: 'Reading file ${_currentFileIndex + 1}/${_fileList.length}...',
     ));
-    
+
     _receiveBuffer = '';
-    await _sendCommandBangle('print(require("Storage").read("$filename"))');
-    await Future.delayed(Duration(milliseconds: 2000));
-    
-    if (_receiveBuffer.isNotEmpty) {
-      await _processFileData(_receiveBuffer);
-      _receiveBuffer = '';
+    _expectedSyncFilename = filename;
+    _fileReceivedCompleter = Completer<void>();
+
+    // The sentinel print (sent right after the read) tells us precisely
+    // when this file's content has fully arrived. A fixed delay here can't
+    // distinguish "small file, done early" from "large/slow transfer, still
+    // arriving" — and cutting a read off early would mean asking the watch
+    // to erase a file whose tail never actually reached the phone.
+    await _sendCommandBangle(
+      'print(require("Storage").read("$filename"));print("SYNC_DONE:$filename")',
+    );
+
+    bool receivedFully = true;
+    try {
+      await _fileReceivedCompleter!.future.timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      receivedFully = false;
+      print("⚠️ Timed out waiting for $filename — leaving it on the watch to retry next sync");
     }
-    
+    _expectedSyncFilename = null;
+    _fileReceivedCompleter = null;
+
+    if (receivedFully) {
+      final rowsInserted = await _processFileData(_receiveBuffer);
+      _receiveBuffer = '';
+
+      if (rowsInserted > 0) {
+        // Erase only now that the rows are confirmed durably in the phone's
+        // DB. Fire-and-forget is intentional: if this command is lost or
+        // fails, the file simply stays on the watch and gets synced (and
+        // its erase re-attempted) again next time — that can duplicate rows
+        // on a later re-sync, but it can never lose data, which is the
+        // property that matters here.
+        await _sendCommandBangle('require("Storage").erase("$filename")');
+      } else {
+        print("⚠️ $filename produced 0 parseable rows — leaving it on the watch");
+      }
+    }
+
     _currentFileIndex++;
-    await Future.delayed(Duration(milliseconds: 500));
+    await Future.delayed(Duration(milliseconds: 300));
     await _readNextFileBangle();
   }
 
-  Future<void> _processFileData(String csvData) async {
+  // Returns the number of rows successfully parsed and inserted, so the
+  // caller can gate deleting the source file off the watch on this being
+  // >0 rather than just assuming the read succeeded.
+  Future<int> _processFileData(String csvData) async {
     List<String> lines = csvData.split('\n');
     String? deviceId = _connectedDevice?.remoteId.toString();
-    
+    int rowsInserted = 0;
+
     for (String line in lines) {
       line = line.trim();
       if (line.isEmpty || line.startsWith('timestamp,')) continue;
-      
+
       try {
         List<String> parts = line.split(',');
-        
+
         if (parts.length >= 7) {
           int timestamp = int.parse(parts[0]);
           int bpm = int.parse(parts[1]);
@@ -566,15 +630,17 @@ class BleService {
           
           await _db.insertHeartRateWithTimestamp(timestamp, bpm, rrIntervalMs, confidence, deviceId);
           await _db.insertAccelerometerWithTimestamp(timestamp, accelX, accelY, accelZ, deviceId);
-          
+
           _totalRecords++;
+          rowsInserted++;
         }
       } catch (e) {
         print("Error parsing line: $line - $e");
       }
     }
-    
-    print("✅ Processed ${_totalRecords} total records");
+
+    print("✅ Processed $rowsInserted rows from this file (total $_totalRecords)");
+    return rowsInserted;
   }
 
   // T-WATCH SYNC (Already streaming real-time)

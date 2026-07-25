@@ -32,6 +32,31 @@ function updateSettings(settings) {
   require("Storage").writeJSON("pulsewatch.json", settings);
 }
 
+// Keeps pulsewatch.json's "recording" flag in sync with the actual HRM
+// listener state, regardless of whether start()/stop() was triggered from
+// the watch's own menu (app.js, which already wrote this itself) or
+// remotely from the phone over BLE (ble_service.dart's auto-start-on-
+// connect, which — before this — only ever called exports.start() and left
+// the persisted flag untouched). Without this:
+//   - the widget's green recording dot never lit up during normal
+//     phone-triggered recording, since widget.js reads this persisted flag,
+//     not the live in-memory isRecording state
+//   - a watch reboot mid-session (battery pull, crash, etc.) came back up
+//     with recording:false and never resumed, since boot.js/widget.js only
+//     auto-load and start based on this persisted flag
+// Wrapped defensively, matching saveData()'s handling of storage errors —
+// a failed write here shouldn't be able to block the actual sensor
+// start/stop, which matters more than the persisted flag.
+function persistRecordingFlag(value) {
+  try {
+    var settings = loadSettings();
+    settings.recording = value;
+    updateSettings(settings);
+  } catch (e) {
+    // Silent fail
+  }
+}
+
 function saveData() {
   if (dataBuffer.length === 0) return;
 
@@ -131,6 +156,7 @@ exports.start = function() {
   Bangle.on('HRM', onHRM);
   Bangle.setHRMPower(1, CONFIG.appName);
   liveFlushTimer = setInterval(flushLiveBuffer, CONFIG.liveFlushInterval);
+  persistRecordingFlag(true);
 
   console.log("✅ PulseWatch recording started");
 };
@@ -147,8 +173,9 @@ exports.stop = function() {
 
   Bangle.removeListener('HRM', onHRM);
   Bangle.setHRMPower(0, CONFIG.appName);
-  
+
   isRecording = false;
+  persistRecordingFlag(false);
 };
 
 exports.isRecording = function() {

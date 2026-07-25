@@ -157,10 +157,22 @@ class DatabaseHelper {
     return result.first;
   }
 
-  // Get last N HR+accel rows joined, oldest-first, for inference
-  Future<List<Map<String, dynamic>>> getRecentHRWithAccel(int limit) async {
+  // Get every HR+accel row (joined, oldest-first) since cutoffMillis — used
+  // for full-session inference once the 48h collection goal is reached.
+  //
+  // Joins on an exact timestamp match rather than a fuzzy `abs(diff) < 500`
+  // range: the firmware (bangle/lib.js onHRM) stamps one HR sample and one
+  // accel sample per tick with the *same* integer timestamp, and
+  // ble_service.dart inserts both rows with that identical value — so an
+  // exact match is correct for real data, and unlike a range comparison it
+  // can use idx_hr_timestamp/idx_accel_timestamp instead of falling back to
+  // a full nested-loop join. That distinction matters a lot at 48h scale:
+  // a range join over ~170k rows on each side is an O(n*m) scan (tens of
+  // billions of comparisons) that never finishes in practice; the indexed
+  // equality join is O(n log m).
+  Future<List<Map<String, dynamic>>> getHRWithAccelSince(int cutoffMillis) async {
     final db = await database;
-    final rows = await db.rawQuery('''
+    return await db.rawQuery('''
       SELECT h.timestamp, h.bpm,
              COALESCE(h.rr_interval_ms, 0) AS rr,
              COALESCE(a.x, 0) AS x,
@@ -168,11 +180,10 @@ class DatabaseHelper {
              COALESCE(a.z, 0) AS z
       FROM heart_rate h
       LEFT JOIN accelerometer a
-        ON abs(h.timestamp - a.timestamp) < 500
-      ORDER BY h.timestamp DESC
-      LIMIT ?
-    ''', [limit]);
-    return rows.reversed.toList();
+        ON a.timestamp = h.timestamp
+      WHERE h.timestamp >= ?
+      ORDER BY h.timestamp ASC
+    ''', [cutoffMillis]);
   }
 
   // Get last N heart rate readings

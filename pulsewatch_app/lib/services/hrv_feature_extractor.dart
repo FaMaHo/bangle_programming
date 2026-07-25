@@ -19,10 +19,15 @@ class BpmSample {
   });
 }
 
-/// Computes 23 HRV + accel features from a rolling BPM window.
-/// All features are derived from BPM and accelerometer data available over BLE.
-/// PPG-morphology features (systolic_upslope, diastolic_decay, ai_index) and
-/// long-term circadian features are not measurable from BPM alone — set to 0.0.
+/// Computes the 22 HRV + accel features the trained model expects, from a
+/// rolling BPM window.
+/// Most features are derived from BPM and accelerometer data available over
+/// BLE. PPG-morphology features (systolic_upslope, ai_index) aren't
+/// measurable from BPM alone — held at the training-set mean, which is
+/// harmless: they carry 0% importance in the trained model. The
+/// accelerometer-derived features below (sedentary_time_ratio, accel_entropy,
+/// movement_variability) are NOT low-importance — they're the model's
+/// dominant signal (44% / 26% / 7% respectively) and are computed live here.
 class HrvFeatureExtractor {
   static const int minSamples = 60; // ~1 min minimum for any meaningful HRV
 
@@ -111,19 +116,19 @@ class HrvFeatureExtractor {
       'lf_hf_ratio': lfHfRatio,
       'total_power': totalPower,
       'pulse_amplitude': pulseAmp,
-      // PPG waveform features unavailable from BPM stream.
-      // Set to training-set mean so ONNX StandardScaler outputs 0 (neutral)
-      // rather than an extreme outlier. Importances: upslope=6.1%, decay=8.2%.
+      // PPG waveform features unavailable from BPM stream (no raw PPG over
+      // BLE). Set to training-set mean so the StandardScaler outputs ~0
+      // (neutral). Both are genuinely 0% importance in the trained model,
+      // so this has no effect on the score.
       'systolic_upslope': 1262.26,
-      'diastolic_decay': -1257.75,
-      'ai_index': 2.39,            // 0% importance — value irrelevant
-      'hr_step_ratio': hrStepRatio, // 0% importance — computed but ignored
-      'chronotropic_index': chronoIndex, // 0% importance — computed but ignored
+      'ai_index': 2.39,
+      'hr_step_ratio': hrStepRatio,       // 1.4% importance — computed live
+      'chronotropic_index': chronoIndex,  // 0% importance — computed but unused by the model
       'recovery_slope_1min': slope1m,
       'recovery_slope_3min': slope3m,
-      'accel_entropy': accelEntropy,     // 0% importance — computed but ignored
-      'movement_variability': movVar,    // 0% importance — computed but ignored
-      'sedentary_time_ratio': sedRatio,  // 0% importance — computed but ignored
+      'accel_entropy': accelEntropy,      // 26% importance — second-biggest driver
+      'movement_variability': movVar,     // 7% importance
+      'sedentary_time_ratio': sedRatio,   // 44% importance — the model's dominant feature
       // Long-term circadian features require overnight DB — set to training mean.
       // nocturnal_hr_mean=0.0 was -6.8 sigma after scaling (critical outlier).
       'nocturnal_hr_mean': 83.62,        // training mean, 2.1% importance
@@ -282,7 +287,7 @@ class HrvFeatureExtractor {
         'mean_rr': 0.0, 'sdnn': 0.0, 'rmssd': 0.0, 'pnn50': 0.0,
         'tri_index': 0.0, 'lf_power': 0.0, 'hf_power': 0.0,
         'lf_hf_ratio': 0.0, 'total_power': 0.0, 'pulse_amplitude': 0.0,
-        'systolic_upslope': 0.0, 'diastolic_decay': 0.0, 'ai_index': 0.0,
+        'systolic_upslope': 0.0, 'ai_index': 0.0,
         'hr_step_ratio': 0.0, 'chronotropic_index': 0.0,
         'recovery_slope_1min': 0.0, 'recovery_slope_3min': 0.0,
         'accel_entropy': 0.0, 'movement_variability': 0.0,

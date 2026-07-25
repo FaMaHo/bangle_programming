@@ -45,7 +45,8 @@ last-known BLE device on resume.
 
 | Screen | Purpose |
 |---|---|
-| `home_screen.dart` | Dashboard: watch status, 48h collection progress, live BPM + signal quality, risk gauge, upload nudge. Owns the live BLE sample buffer and triggers on-device risk scoring. |
+| `home_screen.dart` | Dashboard: watch status, 48h collection progress, live BPM + signal quality, upload nudge, and the risk report card (locked until 48h of data is collected, then triggers `report_service.dart`'s one-time full-session scoring). |
+| `report_screen.dart` | Full cardiac risk report — gauge, risk level/assessment, session overview, top contributing features with clinical descriptions. Pushed from the home screen once a report exists. |
 | `insights_screen.dart` | 7-day trends: daily presence, HR stats, average signal quality, days-recorded progress. |
 | `device_screen.dart` | BLE scan/connect/disconnect, signal quality (from real HRM confidence, not a synthetic score). |
 | `server_screen.dart` | "Upload" tab — server URL/connection test, data stats, consent-gated export & upload. Deliberately does *not* hold account/settings UI (see `settings_screen.dart`). |
@@ -62,8 +63,9 @@ last-known BLE device on resume.
 | `auth_service.dart` | Enrollment/login/refresh, token storage via `flutter_secure_storage`. |
 | `ble_service.dart` | Scanning, connecting, parsing incoming Bangle.js/T-Watch data, BLE line reassembly (see below). Singleton (`BleService()` factory always returns the same instance). |
 | `database_helper.dart` | Local SQLite (`sqflite`) — `heart_rate`, `accelerometer`, `sessions` tables. |
-| `hrv_feature_extractor.dart` | Computes the ~23 HRV/accel features the AI model expects from a rolling window of samples. |
-| `inference_service.dart` | Runs the on-device ONNX model (`assets/models/model.onnx`) to turn features into a risk score. |
+| `hrv_feature_extractor.dart` | Computes the 22 HRV/accel features the AI model expects from a window of samples. |
+| `inference_service.dart` | Runs the on-device ONNX model (`assets/models/model.onnx`) to turn features into a risk score for one window. |
+| `report_service.dart` | Owns the one-time full-session report: pulls the last 48h from the DB, slides 5-min/50%-overlap windows across all of it, averages the per-window probabilities into a session score, persists the result, and fires the risk alert/alarm once. |
 | `server_service.dart` | Server URL config, CSV export, upload, auto-upload eligibility. |
 | `biometric_lock_service.dart` | Wraps `local_auth` for the app-lock feature. |
 | `notification_service.dart` | Local push notification when a risk alert fires. |
@@ -81,19 +83,39 @@ ble_service.dart: _uartCarry buffer reassembles fragments into complete lines
   ▼
 Parse "timestamp,bpm,rr_interval_ms,confidence,x,y,z"
   │
-  ├──► database_helper.dart: insertHeartRateWithTimestamp / insertAccelerometerWithTimestamp
-  │        (durable local storage — this is what gets exported/uploaded)
+  ▼
+database_helper.dart: insertHeartRateWithTimestamp / insertAccelerometerWithTimestamp
+  (durable local storage; also drives the live BPM card and the "X/48h
+  collected" progress bar on Home — but NOT risk scoring, see below)
+```
+
+```
+home_screen.dart: _loadStats() (polled every 10s)
   │
-  └──► liveSampleStream (BpmSample) ──► home_screen.dart's rolling _bpmBuffer
-                                              │
-                                              ▼ (every 2 min, once ≥300 samples / ~5 min)
-                                     hrv_feature_extractor.dart: compute()
-                                              │
-                                              ▼
-                                     inference_service.dart: getRiskScore()
-                                              │
-                                              ▼
-                                     Risk gauge on Home + notification if score > threshold
+  ▼ once getHourlyMeanHR(48).length >= 48 and no report exists yet
+report_service.dart: computeReport()
+  │
+  ├─► database_helper.dart: getHRWithAccelSince(now - 48h)
+  │        (joins heart_rate/accelerometer on an exact timestamp match —
+  │         the firmware stamps both rows in one onHRM() tick with the same
+  │         integer timestamp, see bangle/lib.js. This must stay an
+  │         equality join: a fuzzy `abs(diff) < 500` range join can't use
+  │         the timestamp indexes and turns into an O(n·m) nested-loop scan
+  │         that never finishes at 48h/~170k-row scale — caught by
+  │         test/report_flow_test.dart, which seeds a realistic 1Hz 48h+
+  │         session in the exact wire format above and runs the real
+  │         on-device ONNX model against it end-to-end.)
+  │
+  ├─► hrv_feature_extractor.dart: compute() per 5-min/50%-overlap window
+  │        across the whole session, computeNocturnal() once for the
+  │        session-level circadian features
+  │
+  ├─► inference_service.dart: getRiskScore() per window
+  │        → session score = mean(window probabilities), matching how the
+  │          model was trained/evaluated (fromDaria/generate_report_html.py)
+  │
+  └─► persists the report (shared_preferences) and fires
+      NotificationService.sendRiskAlert() / BleService.sendRiskAlarm() once
 ```
 
 `BpmSample` carries the watch's own timestamp (not phone receipt time) and,
@@ -102,9 +124,13 @@ uses the real RR value when available and only falls back to a
 `60000/bpm` approximation for samples that don't have one (e.g. older data,
 or T-Watch, which has no RR output).
 
-If the live buffer hasn't reached the ~5-minute window yet (e.g. right after
-opening the app), risk scoring falls back to the last 300 DB rows via
-`getRecentHRWithAccel()` instead of waiting.
+The risk score is deliberately **not** live — it's computed once, from the
+full 48h session, the first time `home_screen.dart` observes 48h of
+coverage. Earlier this scored a single 5-minute window every 2 minutes
+starting 5 minutes after connecting; that used too little data to be
+trustworthy (several features were always at training-set defaults) and
+produced unreliable high-risk false positives, so it was replaced with the
+full-session approach above.
 
 ## Auth model
 
