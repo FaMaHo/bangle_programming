@@ -66,12 +66,6 @@ class InferenceService {
     return risk;
   }
 
-  static String getRiskLevel(double score) {
-    if (score < 0.3) return 'Low';
-    if (score < 0.6) return 'Medium';
-    return 'High';
-  }
-
   static void dispose() {
     _session?.release();
     OrtEnv.instance.release();
@@ -87,4 +81,3 @@ class InferenceService {
 //   ... (any subset — missing features default to 0.0)
 // };
 // final score = await InferenceService.getRiskScore(features);
-// final level = InferenceService.getRiskLevel(score);

@@ -54,7 +54,6 @@ last-known BLE device on resume.
 | `enroll_screen.dart` | First-run: turn a researcher/website-issued enrollment code into an account (username + password). |
 | `login_screen.dart` | Returning-user login. |
 | `lock_screen.dart` | Biometric/PIN gate, shown on launch and whenever the app returns from the background if app-lock is enabled. |
-| `debug_screen.dart` | Not currently reachable from any navigation path — leftover dev tool for inserting test DB rows. Safe to delete or wire up, whichever is more useful. |
 
 ## Services
 

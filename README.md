@@ -235,7 +235,7 @@ curl -H "Authorization: Bearer <your_access_token>" https://pulsana.org/patient/
 | `pulsewatch_backend/` | Flask API + website, deployed to `pulsana.org` | [`ARCHITECTURE.md`](pulsewatch_backend/ARCHITECTURE.md) |
 | `models/` | AI model training/evaluation/conversion scripts (XGBoost + ONNX/TFLite export) | — |
 | `firmware/` | T-Watch S3 Plus firmware (secondary/experimental device) | — |
-| `docs/` | Historical design docs, hardware reference PDFs, deployment notes | — |
+| `docs/` | Hardware reference PDFs/notes (Bangle.js 2, MAX30102, LilyGo T-Watch S3 Plus) | — |
 | `server/` | Early prototype backend, superseded by `pulsewatch_backend/` — kept for reference, not active | — |
 
 ---
