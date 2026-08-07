@@ -32,7 +32,7 @@ timestamp,bpm,rr_interval_ms,confidence,accel_x,accel_y,accel_z
 ```
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how recording start/stop, the
-widget, and BLE streaming actually fit together.
+widget, and the phone's file-sync flow actually fit together.
 
 ## For Developers
 

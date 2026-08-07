@@ -1,6 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'background_sync_service.dart';
 import 'server_service.dart';
 
 /// Handles account creation (via a researcher-issued enrollment code),
@@ -19,8 +22,23 @@ class AuthService {
   static const _kRole = 'role';
   static const _kUsername = 'username';
 
+  /// This is the very first storage read on every app launch (see
+  /// _AppEntryState._checkState), so it has to be resilient: Android's
+  /// Auto Backup can restore an old encrypted-storage file onto a device
+  /// whose Keystore key doesn't match it (the ciphertext and the key that
+  /// produced it are tied together and don't survive a backup/restore as a
+  /// pair) — reading it then throws a PlatformException wrapping a
+  /// BadPaddingException instead of returning null. Unhandled, that left
+  /// the app stuck on the loading screen forever, since nothing downstream
+  /// of this call ever ran. Treat that as "not logged in" and wipe the
+  /// unreadable entries so it doesn't keep failing on every future launch.
   Future<bool> isLoggedIn() async {
-    return (await _storage.read(key: _kRefreshToken)) != null;
+    try {
+      return (await _storage.read(key: _kRefreshToken)) != null;
+    } on PlatformException {
+      await _storage.deleteAll();
+      return false;
+    }
   }
 
   Future<String?> getAccessToken() => _storage.read(key: _kAccessToken);
@@ -129,6 +147,18 @@ class AuthService {
 
   Future<void> logout() async {
     await _storage.deleteAll();
+
+    // A logged-out install has no server session to eventually upload
+    // synced BLE data to, so there's no reason to keep waking the device
+    // up for it in the background. This also runs when refreshAccessToken()
+    // force-logs-out an expired session above, which is intentional — the
+    // same reasoning applies either way. Best-effort: a failure here (e.g.
+    // WorkManager plugin not ready yet) shouldn't block the logout itself.
+    if (Platform.isAndroid) {
+      try {
+        await BackgroundSyncService.instance.cancel();
+      } catch (_) {}
+    }
   }
 }
 

@@ -24,7 +24,7 @@ Supervisor: Prof. Dr. Ing. Nicolae Goga
 
 PulseWatch AI continuously monitors heart rate and motion data through a Bangle.js 2 smartwatch, transfers that data to a Flutter mobile app via Bluetooth, and uploads it to a research server for cardiovascular analysis. The goal is early detection of heart sclerosis (cardiosclerosis) — a condition that advances silently for years before clinical symptoms appear.
 
-The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs on the researcher's machine and produces a 0–1 risk probability from 48-hour recordings. A lighter version of the same feature pipeline also runs on-device in the app for a live risk estimate.
+The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs on the researcher's machine and produces a 0–1 risk probability from 48-hour recordings. A lighter version of the same feature pipeline also runs on-device in the app, gated behind a full 48-hour session — never a short live window, which isn't how the model was trained/evaluated.
 
 ---
 
@@ -34,13 +34,21 @@ The AI model (XGBoost, trained on 10.4 million rows from 7 public datasets) runs
 Bangle.js 2 Watch
   └─ PPG (HRM) + Accelerometer, continuous while recording
   └─ Buffers CSV in flash memory, saved every 5 minutes
-  └─ Streams live data over BLE (Nordic UART), batched every 15s
+  └─ No live BLE streaming — file-sync is the only data path (removed;
+     added complexity for a feature that wasn't load-bearing for the
+     risk-score pipeline)
         │
-        ▼ Bluetooth Low Energy
+        ▼ Bluetooth Low Energy (file-sync: list → read → confirm-insert → erase)
 Flutter Mobile App (Android — iOS not yet supported, see below)
   └─ Account: enrollment code (one-time) or username/password login
-  └─ Receives live BLE data, stores in local SQLite
-  └─ Computes an on-device risk estimate from rolling HRV features
+  └─ Bonds with the watch on first connect, so background reconnection
+     uses Android's native autoConnect instead of active scanning —
+     bare/unbonded BLE devices get much worse background-scan treatment
+     from Android, which is what made background sync unreliable before
+  └─ Pulls data via file-sync: on connect, every 2 min while the app is
+     open, and via a ~15-min WorkManager background task otherwise
+  └─ Computes an on-device risk estimate once a full 48h session is
+     collected — never from a short live window
   └─ Shows Home dashboard, Insights, Device, Upload, Settings screens
   └─ Optional biometric/PIN app-lock
   └─ Exports anonymized CSV (last 48 hours) and uploads over HTTPS
@@ -68,8 +76,8 @@ The backend used to run on a researcher's laptop, reachable only over the same W
 
 - Background heart rate monitoring using the onboard HRM sensor, including real beat-to-beat RR intervals (not just averaged BPM)
 - 3-axis accelerometer recording (Kionix KX022)
-- Data buffered in flash as timestamped CSV files (`pw*.csv`), saved every 5 minutes
-- Live data streamed over BLE (Nordic UART), batched into one transmission every 15 seconds instead of one per sample — cuts radio wake-ups roughly 15x for battery life, with no loss of data fidelity (flash still captures every sample)
+- Data buffered in flash as timestamped CSV files (`pw*.csv`), saved every 5 minutes via a single plain `Storage.write()` — not the chunked `StorageFile` API, which silently made saved files unfindable by any `Storage.list()` call (including the watch's own status menu) due to a raw chunk-number byte Espruino appends to `StorageFile` names
+- No live BLE streaming — the phone pulls data exclusively via file-sync (list → read → confirm-insert → erase), on connect and periodically thereafter
 - Auto-starts recording on watch boot if enabled in settings
 - Control menu in the watch launcher: toggle recording, view status, delete data
 - Green dot widget in top-right corner shows recording is active
@@ -81,7 +89,7 @@ See [`bangle/ARCHITECTURE.md`](bangle/ARCHITECTURE.md) for details.
 
 **Screens:**
 
-- **Home** — dashboard: watch connection status (tap to go connect it), 48-hour data-collection progress, live heart rate with real signal-quality percentage from the watch's HRM confidence, cardiac risk gauge, and a nudge if there's unsynced data waiting to be uploaded
+- **Home** — dashboard: watch connection status (tap to go connect it), 48-hour data-collection progress, cardiac risk gauge (computed once the full 48h session is collected), and a nudge if there's unsynced data waiting to be uploaded
 - **Insights** — weekly day-by-day data presence, 7-day heart rate stats plus average signal quality, days-recorded progress
 - **Device** — BLE scan and connect to Bangle.js 2 or T-Watch S3 Plus; Bangle.js always appears first; auto-starts recording on connection; real signal-quality reading (not a made-up score)
 - **Upload** — anonymized data export and upload to the research server, with a consent screen before every upload
@@ -99,6 +107,8 @@ See [`bangle/ARCHITECTURE.md`](bangle/ARCHITECTURE.md) for details.
 
 - Connects to Bangle.js 2 via Nordic UART Service; reassembles data that arrives split across multiple BLE packets before parsing it (a single CSV line is often longer than one packet)
 - Sends `require("pulsewatch").start()` command on connection to auto-start recording
+- Bonds with the watch on first successful connect, so Android treats background reconnection as a known/trusted companion device (native `autoConnect`) instead of throttling it the way it throttles active scans for unbonded devices
+- Background sync (WorkManager, ~15 min floor) and an interactive 2-minute re-sync timer keep pulling any files the watch has flushed, independent of whether the app is open
 - Also supports T-Watch S3 Plus via a custom BLE service
 - Bangle.js automatically sorted to top of scan results list
 

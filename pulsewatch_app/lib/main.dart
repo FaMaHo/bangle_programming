@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'theme/app_theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/insights_screen.dart';
@@ -8,6 +10,7 @@ import 'screens/enroll_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/lock_screen.dart';
 import 'services/auth_service.dart';
+import 'services/background_sync_service.dart';
 import 'services/biometric_lock_service.dart';
 import 'services/server_service.dart';
 import 'services/ble_service.dart';
@@ -15,6 +18,18 @@ import 'services/inference_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Required once, before runApp, for FlutterForegroundTask's main-isolate
+  // <-> TaskHandler-isolate messaging to work (see foreground_task_handler.dart).
+  FlutterForegroundTask.initCommunicationPort();
+  // Registers callbackDispatcher with the Android WorkManager plugin so a
+  // periodic background sync task (scheduled from BleService once a watch
+  // is connected — see BackgroundSyncService.ensureScheduled) can actually
+  // fire later, including after the app isn't running at all. Must happen
+  // before runApp for the same reason as initCommunicationPort() above:
+  // the plugin needs to be wired up before anything could try to use it.
+  if (Platform.isAndroid) {
+    await BackgroundSyncService.instance.init();
+  }
   await InferenceService.initialize();
   runApp(const PulseWatchApp());
 }
@@ -75,10 +90,22 @@ class _AppEntryState extends State<_AppEntry> with WidgetsBindingObserver {
   }
 
   Future<void> _checkState() async {
-    final loggedIn = await AuthService.instance.isLoggedIn();
+    bool loggedIn = false;
+    bool lockEnabled = false;
 
-    final lockEnabled = await BiometricLockService.instance.isEnabled() &&
-        await BiometricLockService.instance.isDeviceSupported();
+    // This gates every app launch — nothing renders until it finishes. It's
+    // not just AuthService.isLoggedIn() that's been hardened against a bad
+    // secure-storage read; this try/catch is a backstop so that *any*
+    // unexpected exception here falls back to "not logged in" instead of
+    // leaving the user stuck on the loading spinner forever, which is what
+    // happened when this had no error handling at all.
+    try {
+      loggedIn = await AuthService.instance.isLoggedIn();
+      lockEnabled = await BiometricLockService.instance.isEnabled() &&
+          await BiometricLockService.instance.isDeviceSupported();
+    } catch (e) {
+      print('Startup check failed, defaulting to logged-out: $e');
+    }
 
     if (mounted) {
       setState(() {
@@ -151,8 +178,15 @@ class _MainNavigationState extends State<MainNavigation>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Also try on first load, not only on resume
-    WidgetsBinding.instance.addPostFrameCallback((_) => _triggerAutoUpload());
+    // Also try on first load, not only on resume — didChangeAppLifecycleState
+    // only fires on a background->foreground *transition*, which a cold
+    // start (app fully closed, then reopened) never triggers. Without this,
+    // reopening the app after the BLE connection had already died left it
+    // disconnected until the user noticed and manually reconnected.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _triggerAutoUpload();
+      BleService().tryAutoReconnect();
+    });
   }
 
   @override

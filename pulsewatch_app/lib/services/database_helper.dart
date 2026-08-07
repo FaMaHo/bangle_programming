@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -33,6 +33,36 @@ class DatabaseHelper {
     if (oldVersion < 3) {
       await db.execute(
         'ALTER TABLE heart_rate ADD COLUMN rr_interval_ms INTEGER'
+      );
+    }
+    if (oldVersion < 4) {
+      // Live streaming and file sync both insert into these tables from
+      // the same underlying watch samples, with nothing previously
+      // preventing the same (timestamp, device) sample from landing twice
+      // — e.g. a sample already captured live, whose source file on the
+      // watch later also gets synced because it wasn't erased in time.
+      // report_service.dart averages every row in a window with no
+      // dedup, so a duplicate silently double-weights that instant in the
+      // computed HRV features and the final risk score, with no visible
+      // symptom. A UNIQUE index makes a duplicate an INSERT conflict
+      // instead, resolved as ConflictAlgorithm.ignore at every insert call
+      // site below — existing duplicate rows are removed first since
+      // CREATE UNIQUE INDEX fails outright if any already exist.
+      await db.execute('''
+        DELETE FROM heart_rate WHERE id NOT IN (
+          SELECT MIN(id) FROM heart_rate GROUP BY timestamp, device_id
+        )
+      ''');
+      await db.execute('''
+        DELETE FROM accelerometer WHERE id NOT IN (
+          SELECT MIN(id) FROM accelerometer GROUP BY timestamp, device_id
+        )
+      ''');
+      await db.execute(
+        'CREATE UNIQUE INDEX idx_hr_unique ON heart_rate(timestamp, device_id)',
+      );
+      await db.execute(
+        'CREATE UNIQUE INDEX idx_accel_unique ON accelerometer(timestamp, device_id)',
       );
     }
   }
@@ -76,52 +106,83 @@ class DatabaseHelper {
     // Create indexes for faster queries
     await db.execute('CREATE INDEX idx_hr_timestamp ON heart_rate(timestamp)');
     await db.execute('CREATE INDEX idx_accel_timestamp ON accelerometer(timestamp)');
+
+    // See _upgradeDB's v4 migration for why these exist: prevents the same
+    // watch sample from being inserted twice (once live, once via a later
+    // file sync of the same period) from silently double-weighting the AI
+    // risk score.
+    await db.execute(
+      'CREATE UNIQUE INDEX idx_hr_unique ON heart_rate(timestamp, device_id)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX idx_accel_unique ON accelerometer(timestamp, device_id)',
+    );
   }
 
   // Insert heart rate reading
   Future<int> insertHeartRate(int bpm, String? deviceId) async {
     final db = await database;
-    return await db.insert('heart_rate', {
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'bpm': bpm,
-      'device_id': deviceId,
-    });
+    return await db.insert(
+      'heart_rate',
+      {
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'bpm': bpm,
+        'device_id': deviceId,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   // Insert heart rate with specific timestamp and confidence (for CSV data from watch)
   Future<int> insertHeartRateWithTimestamp(int timestamp, int bpm, int rrIntervalMs, int confidence, String? deviceId) async {
     final db = await database;
-    return await db.insert('heart_rate', {
-      'timestamp': timestamp,
-      'bpm': bpm,
-      'rr_interval_ms': rrIntervalMs,
-      'confidence': confidence,
-      'device_id': deviceId,
-    });
+    return await db.insert(
+      'heart_rate',
+      {
+        'timestamp': timestamp,
+        'bpm': bpm,
+        'rr_interval_ms': rrIntervalMs,
+        'confidence': confidence,
+        'device_id': deviceId,
+      },
+      // Same (timestamp, device_id) landing twice — once from live
+      // streaming, once from a later file sync covering the same period —
+      // is exactly the duplication this index exists to block; silently
+      // dropping the second insert is correct here; see the v4 migration.
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   // Insert accelerometer reading
   Future<int> insertAccelerometer(int x, int y, int z, String? deviceId) async {
     final db = await database;
-    return await db.insert('accelerometer', {
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'x': x,
-      'y': y,
-      'z': z,
-      'device_id': deviceId,
-    });
+    return await db.insert(
+      'accelerometer',
+      {
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'x': x,
+        'y': y,
+        'z': z,
+        'device_id': deviceId,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   // Insert accelerometer with specific timestamp (for CSV data from watch)
   Future<int> insertAccelerometerWithTimestamp(int timestamp, int x, int y, int z, String? deviceId) async {
     final db = await database;
-    return await db.insert('accelerometer', {
-      'timestamp': timestamp,
-      'x': x,
-      'y': y,
-      'z': z,
-      'device_id': deviceId,
-    });
+    return await db.insert(
+      'accelerometer',
+      {
+        'timestamp': timestamp,
+        'x': x,
+        'y': y,
+        'z': z,
+        'device_id': deviceId,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   // Get heart rate for today
@@ -380,8 +441,74 @@ class DatabaseHelper {
     return avg?.round() ?? 0;
   }
 
+  /// Finds stretches with no heart-rate reading for at least [threshold] —
+  /// the same kind of gap that showed up as multi-minute/multi-hour blank
+  /// stretches in exported session CSVs when background sync was silently
+  /// failing. Surfaced in the Device screen so a gap is visible *during*
+  /// the session instead of only discoverable afterward by eyeballing an
+  /// exported file.
+  ///
+  /// Includes a trailing gap for "still ongoing right now" (most recent
+  /// reading is itself older than [threshold]) with `end` set to the
+  /// current time, distinct from a closed gap between two real readings.
+  ///
+  /// [since] bounds how far back to look — callers doing a live UI refresh
+  /// should pass something like the last several hours rather than the
+  /// full session, since this pulls every timestamp in range into memory
+  /// to scan for consecutive deltas (fine for that scale; not something to
+  /// run unbounded over a full 48h/~170k-row session on a timer).
+  Future<List<ReadingGap>> findGaps({
+    required Duration threshold,
+    DateTime? since,
+    int limit = 20,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'heart_rate',
+      columns: ['timestamp'],
+      where: since != null ? 'timestamp >= ?' : null,
+      whereArgs: since != null ? [since.millisecondsSinceEpoch] : null,
+      orderBy: 'timestamp ASC',
+    );
+
+    final gaps = <ReadingGap>[];
+
+    for (var i = 1; i < rows.length; i++) {
+      final prevMs = rows[i - 1]['timestamp'] as int;
+      final currMs = rows[i]['timestamp'] as int;
+      if (currMs - prevMs >= threshold.inMilliseconds) {
+        gaps.add(ReadingGap(
+          start: DateTime.fromMillisecondsSinceEpoch(prevMs),
+          end: DateTime.fromMillisecondsSinceEpoch(currMs),
+        ));
+      }
+    }
+
+    if (rows.isNotEmpty) {
+      final lastReading =
+          DateTime.fromMillisecondsSinceEpoch(rows.last['timestamp'] as int);
+      final sinceLast = DateTime.now().difference(lastReading);
+      if (sinceLast >= threshold) {
+        gaps.add(ReadingGap(start: lastReading, end: DateTime.now()));
+      }
+    }
+
+    gaps.sort((a, b) => b.start.compareTo(a.start)); // most recent first
+    return gaps.length > limit ? gaps.sublist(0, limit) : gaps;
+  }
+
   Future<void> close() async {
     final db = await database;
     await db.close();
   }
+}
+
+/// A stretch with no heart-rate reading for at least the caller's requested
+/// threshold — see [DatabaseHelper.findGaps].
+class ReadingGap {
+  final DateTime start;
+  final DateTime end;
+  Duration get duration => end.difference(start);
+
+  ReadingGap({required this.start, required this.end});
 }

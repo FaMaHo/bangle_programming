@@ -2,7 +2,7 @@ name: pulsewatch_app
 description: "PulseWatch AI - Medical Research System for Heart Sclerosis Detection"
 publish_to: 'none'
 
-version: 1.0.0+3
+version: 1.0.0+11
 
 environment:
   sdk: ^3.10.1
@@ -47,6 +47,12 @@ dependencies:
 
   # Local notifications for patient alerts
   flutter_local_notifications: ^18.0.1
+  flutter_foreground_task: ^10.0.0
+
+  # Periodic background BLE sync (see lib/services/background_sync_service.dart)
+  # — the actual 48h data-completeness guarantee, independent of whether the
+  # app process/foreground service survives being backgrounded that long.
+  workmanager: ^0.6.0
 
 dev_dependencies:
   flutter_test:

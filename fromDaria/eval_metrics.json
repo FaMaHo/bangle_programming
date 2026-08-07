@@ -1,0 +1,13 @@
+{
+  "Accuracy": 0.9371,
+  "AUC-ROC": 0.9861,
+  "F1 (Cardio)": 0.9378,
+  "Avg Precision": 0.986,
+  "Brier Score": 0.0458,
+  "Sensitivity": 0.9482,
+  "Specificity": 0.9261,
+  "TN": 2179,
+  "FP": 174,
+  "FN": 122,
+  "TP": 2231
+}

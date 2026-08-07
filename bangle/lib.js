@@ -1,24 +1,20 @@
 // PulseWatch Library - Shared between boot.js and app.js
 
-// it looks like storageFile is not used anywhere?!
-let storageFile;
 // by defaulte it doesn't record until we let it record in the watch settings
 let isRecording = false;
 let dataBuffer = [];
-let liveBuffer = [];
-let liveFlushTimer = null;
 let startTime = 0;
 let lastSaveTime = 0;
 let totalSaved = 0;
 
+// Keep in sync with metadata.json's "version" and the top ChangeLog entry.
+// Logged on every load (see the bottom of this file) so the BLE
+// console/log makes it immediately obvious which firmware is actually
+// running on the watch, rather than having to infer it from behavior.
+const VERSION = "0.07";
+
 const CONFIG = {
   saveInterval: 5 * 60 * 1000,  // 5 minutes for test, should be changed later
-  // Batch live BLE sends instead of one BLE transmission per HRM sample
-  // (~once/sec). Full-fidelity data is always written to flash every
-  // saveInterval regardless of BLE connection, so live streaming is just a
-  // best-effort feed for the phone's UI/real-time scoring — it doesn't need
-  // per-sample latency, and batching cuts radio wake-ups ~15x for battery.
-  liveFlushInterval: 15 * 1000,
   appName: "pulsewatch"
 };
 
@@ -57,22 +53,79 @@ function persistRecordingFlag(value) {
   }
 }
 
+// One-time migration: erases pre-fix StorageFile "ghost" chunks — files
+// created by the old saveData() (which used Storage.open()/StorageFile
+// instead of a plain Storage.write(), see saveData()'s comment) that
+// Storage.list()'s default output can't see because of the raw chunk-number
+// byte Espruino appends to their stored name. Those files were written
+// successfully and are permanently consuming flash, but were never found by
+// any Storage.list(/^pw.../) call in this app, so they were never synced or
+// erased. Runs once per watch — gated by a persisted flag in
+// pulsewatch.json — the first time this fixed lib.js loads; a failure
+// leaves the flag unset so it's simply retried on the next load rather than
+// giving up permanently.
+function cleanupGhostStorageFiles() {
+  var settings = loadSettings();
+  if (settings.ghostFilesCleaned) return;
+
+  try {
+    // {sf:true} asks specifically for StorageFile-type entries — the plain
+    // files the fixed saveData() now writes don't carry that flag, so this
+    // can't ever touch a current, correctly-synced file. No `$` anchor: the
+    // returned raw name may have a trailing chunk byte after ".csv", and
+    // matching against it (rather than requiring it) is what let this find
+    // the ghost files in the first place.
+    var raw = require("Storage").list(/^pw\d+\.csv/, { sf: true });
+    var seen = {};
+    var erased = 0;
+    raw.forEach(function(name) {
+      var m = name.match(/^pw\d+\.csv/);
+      if (!m) return;
+      var logicalName = m[0];
+      if (seen[logicalName]) return;
+      seen[logicalName] = true;
+      // Storage.erase() is documented as not for StorageFiles — opening in
+      // read mode and calling .erase() on the StorageFile object is what
+      // correctly walks and erases every numbered chunk for this logical
+      // name, regardless of how many chunks it actually has.
+      require("Storage").open(logicalName, "r").erase();
+      erased++;
+    });
+    console.log("Ghost StorageFile cleanup: erased " + erased + " old chunked file(s)");
+  } catch (e) {
+    return; // leave ghostFilesCleaned unset — retry next load
+  }
+
+  settings.ghostFilesCleaned = true;
+  updateSettings(settings);
+}
+
 function saveData() {
   if (dataBuffer.length === 0) return;
 
   try {
     var timestamp = Math.floor(Date.now());  // Convert to integer (no decimals)
     var filename = "pw" + timestamp + ".csv";
-    
-    var file = require("Storage").open(filename, "w");
-    file.write("timestamp,bpm,rr_interval_ms,confidence,accel_x,accel_y,accel_z\n");
-    
+
+    // Plain Storage.write(), not Storage.open()/StorageFile. StorageFile
+    // stores content in chunks named "<filename>\1", "\2", etc (the chunk
+    // number is a raw byte appended as the *last character* of the stored
+    // name) — Storage.list()'s default output includes that suffix, which
+    // breaks any regex anchored on `.csv$` (ours, everywhere in this
+    // codebase, on both the watch and phone side) since the string no
+    // longer ends in ".csv". The file was still written and permanently
+    // consumed flash — just invisible to list()/read()/erase() by its
+    // logical name, so it could never be synced or cleaned up. A single
+    // plain write avoids chunking entirely (our per-flush data is at most
+    // ~300 rows / ~12KB, well within one write), matching the plain
+    // filename every reader in this app already assumes.
+    var lines = ["timestamp,bpm,rr_interval_ms,confidence,accel_x,accel_y,accel_z"];
     for (var i = 0; i < dataBuffer.length; i++) {
       var d = dataBuffer[i];
-      file.write(d.t + "," + d.b + "," + d.r + "," + d.c + "," + 
-                 d.x + "," + d.y + "," + d.z + "\n");
+      lines.push(d.t + "," + d.b + "," + d.r + "," + d.c + "," + d.x + "," + d.y + "," + d.z);
     }
-    
+    require("Storage").write(filename, lines.join("\n") + "\n");
+
     totalSaved += dataBuffer.length;
     dataBuffer = [];
     lastSaveTime = Math.floor(Date.now());  // Convert to integer (no decimals)
@@ -91,26 +144,6 @@ function saveData() {
   } catch(e) {
     // Silent fail
   }
-}
-
-function formatLine(d) {
-  return d.t + "," + d.b + "," + d.r + "," + d.c + "," + d.x + "," + d.y + "," + d.z;
-}
-
-// 📡 Sends everything buffered since the last flush as one multi-line BLE
-// burst instead of transmitting per sample. The phone app reassembles BLE
-// notification fragments and splits multi-line payloads back into
-// individual samples, so batching here is transparent to it.
-function flushLiveBuffer() {
-  if (liveBuffer.length === 0) return;
-  try {
-    var lines = liveBuffer.map(formatLine).join("\n");
-    Bluetooth.println(lines);
-    console.log("BLE TX: " + liveBuffer.length + " samples batched");
-  } catch(e) {
-    console.log("BLE TX Error: " + e);
-  }
-  liveBuffer = [];
 }
 
 function onHRM(hrm) {
@@ -132,13 +165,8 @@ function onHRM(hrm) {
     z: Math.round(accel.z * 1000)
   };
 
-  // Buffer for file saving (unchanged)
   dataBuffer.push(data);
 
-  // Buffer for the next batched live BLE send (see flushLiveBuffer)
-  liveBuffer.push(data);
-
-  // File saving logic (unchanged)
   if (Math.floor(Date.now()) - lastSaveTime >= CONFIG.saveInterval) {
     saveData();
   }
@@ -151,11 +179,9 @@ exports.start = function() {
   startTime = Math.floor(Date.now());  // Convert to integer (no decimals)
   lastSaveTime = Math.floor(Date.now());  // Convert to integer (no decimals)
   dataBuffer = [];
-  liveBuffer = [];
 
   Bangle.on('HRM', onHRM);
   Bangle.setHRMPower(1, CONFIG.appName);
-  liveFlushTimer = setInterval(flushLiveBuffer, CONFIG.liveFlushInterval);
   persistRecordingFlag(true);
 
   console.log("✅ PulseWatch recording started");
@@ -164,11 +190,6 @@ exports.start = function() {
 exports.stop = function() {
   if (!isRecording) return;
 
-  if (liveFlushTimer) {
-    clearInterval(liveFlushTimer);
-    liveFlushTimer = null;
-  }
-  flushLiveBuffer(); // send anything still buffered before stopping
   saveData();
 
   Bangle.removeListener('HRM', onHRM);
@@ -207,7 +228,18 @@ exports.deleteAllData = function() {
   files.forEach(function(f) {
     require('Storage').erase(f);
   });
-  
+
+  // Plain-file erase above misses any StorageFile-chunked ghost entries
+  // (see cleanupGhostStorageFiles) — "delete all" should mean all.
+  var ghosts = require('Storage').list(/^pw\d+\.csv/, { sf: true });
+  var seen = {};
+  ghosts.forEach(function(name) {
+    var m = name.match(/^pw\d+\.csv/);
+    if (!m || seen[m[0]]) return;
+    seen[m[0]] = true;
+    require('Storage').open(m[0], 'r').erase();
+  });
+
   var settings = loadSettings();
   settings.lastSave = 0;
   settings.totalRecordings = 0;
@@ -222,10 +254,6 @@ exports.reload = function() {
   
   // Stop current recording if any
   if (isRecording) {
-    if (liveFlushTimer) {
-      clearInterval(liveFlushTimer);
-      liveFlushTimer = null;
-    }
     Bangle.removeListener('HRM', onHRM);
     Bangle.setHRMPower(0, CONFIG.appName);
     isRecording = false;
@@ -238,4 +266,6 @@ exports.reload = function() {
 };
 
 // Call reload immediately when library loads
+console.log("PulseWatch v" + VERSION + " loaded");
+cleanupGhostStorageFiles();
 exports.reload();

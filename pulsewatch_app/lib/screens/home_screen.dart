@@ -13,8 +13,8 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 /// Home dashboard — the first thing a user sees. Answers, at a glance:
 /// is the watch connected, how much data have we collected toward the
-/// 48h goal, what's the current reading, and is there anything the user
-/// needs to go do (connect the watch, upload data).
+/// 48h goal, and is there anything the user needs to go do (connect the
+/// watch, upload data).
 ///
 /// The cardiac risk score is only ever computed once, from the full 48h
 /// session (see ReportService) — never from a short live window, which
@@ -29,8 +29,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> {
   final DatabaseHelper _db = DatabaseHelper.instance;
   final BleService _bleService = BleService();
   final ServerService _server = ServerService.instance;
@@ -40,40 +39,21 @@ class _HomeScreenState extends State<HomeScreen>
   int _avgHR = 0;
   int _totalReadings = 0;
   bool _isConnected = false;
-  int _liveBpm = 0;
-  int _latestConfidence = 0;
   int _coverageHours = 0; // distinct hours with data in the last 48h
   bool _needsUpload = false;
-  int _liveRecordsReceived = 0;
 
   static const _collectionGoalHours = 48;
 
   FinalReport? _report;
   bool _generatingReport = false;
 
-  late AnimationController _heartAnimController;
-  late Animation<double> _heartScaleAnim;
-  Timer? _heartBeatTimer;
   Timer? _statsTimer;
 
   StreamSubscription? _connectionSubscription;
-  StreamSubscription? _transferSubscription;
-  StreamSubscription? _liveSampleSubscription;
 
   @override
   void initState() {
     super.initState();
-
-    _heartAnimController = AnimationController(
-      duration: const Duration(milliseconds: 180),
-      vsync: this,
-    );
-    _heartScaleAnim = Tween<double>(begin: 1.0, end: 1.35).animate(
-      CurvedAnimation(parent: _heartAnimController, curve: Curves.easeOut),
-    );
-    _heartAnimController.addStatusListener((status) {
-      if (status == AnimationStatus.completed) _heartAnimController.reverse();
-    });
 
     NotificationService.initialize();
     _isConnected = _bleService.isConnected;
@@ -84,24 +64,48 @@ class _HomeScreenState extends State<HomeScreen>
       if (mounted) {
         setState(() {
           _isConnected = (state == BluetoothConnectionState.connected);
-          if (!_isConnected) {
-            _liveBpm = 0;
-            _liveRecordsReceived = 0;
-            _heartBeatTimer?.cancel();
-          }
         });
       }
+      if (state == BluetoothConnectionState.connected) {
+        _maybeShowBatteryExemptionPrompt();
+      }
     });
+  }
 
-    _transferSubscription = _bleService.transferProgressStream.listen((progress) {
-      if (mounted) setState(() => _liveRecordsReceived = progress.recordsReceived);
-    });
+  /// Offered once, the first time we see a successful connection where the
+  /// app isn't already exempted — battery optimization is what silently
+  /// throttled/killed the background connection during earlier testing.
+  Future<void> _maybeShowBatteryExemptionPrompt() async {
+    if (!await _bleService.needsBatteryExemptionPrompt()) return;
+    if (!mounted) return;
 
-    _liveSampleSubscription = _bleService.liveSampleStream.listen((sample) {
-      final bpm = sample.bpm.round();
-      if (mounted) setState(() => _liveBpm = bpm);
-      _resetHeartTimer(bpm);
-    });
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Keep recording reliable'),
+        content: const Text(
+          'Your phone\'s battery settings can pause PulseWatch in the '
+          'background, which can interrupt your 48-hour session. On the '
+          'next screen, choose "Allow" (or "Unrestricted") so recording '
+          'keeps running the whole time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _bleService.requestBatteryExemption();
+            },
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    await _bleService.markBatteryExemptionAsked();
   }
 
   /// Kicks off the one-time full-session report once 48h of data has been
@@ -119,19 +123,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  void _resetHeartTimer(int bpm) {
-    _heartBeatTimer?.cancel();
-    if (bpm <= 0) return;
-    final interval = Duration(milliseconds: (60000 / bpm).round());
-    _heartBeatTimer = Timer.periodic(interval, (_) {
-      if (mounted && !_heartAnimController.isAnimating) _heartAnimController.forward();
-    });
-  }
-
   Future<void> _loadStats() async {
     final stats = await _db.getTodayHRStats();
     final total = await _db.getTotalReadings();
-    final confidence = await _db.getLatestConfidence();
     final coverage = await _db.getHourlyMeanHR(_collectionGoalHours);
     final lastReading = await _db.getLastReadingTime();
     final lastUpload = await _server.getLastUploadTime();
@@ -145,7 +139,6 @@ class _HomeScreenState extends State<HomeScreen>
         _maxHR = (stats['maxHR'] as num?)?.toInt() ?? 0;
         _avgHR = (stats['avgHR'] as num?)?.round() ?? 0;
         _totalReadings = total;
-        _latestConfidence = confidence;
         _coverageHours = coverage.length;
         _needsUpload = needsUpload;
       });
@@ -163,12 +156,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
-    _heartAnimController.dispose();
-    _heartBeatTimer?.cancel();
     _statsTimer?.cancel();
     _connectionSubscription?.cancel();
-    _transferSubscription?.cancel();
-    _liveSampleSubscription?.cancel();
     super.dispose();
   }
 
@@ -192,29 +181,6 @@ class _HomeScreenState extends State<HomeScreen>
       default:
         return 'High Risk';
     }
-  }
-
-  String _heartZone(int bpm) {
-    if (bpm == 0) return '';
-    if (bpm < 60) return 'Below Normal';
-    if (bpm < 80) return 'Resting';
-    if (bpm < 100) return 'Normal';
-    if (bpm < 130) return 'Active';
-    return 'Elevated';
-  }
-
-  Color _heartZoneColor(int bpm) {
-    if (bpm == 0) return Colors.grey;
-    if (bpm < 60) return Colors.blue;
-    if (bpm < 100) return AppColors.primaryGreen;
-    if (bpm < 130) return AppColors.warning;
-    return AppColors.error;
-  }
-
-  Color _confidenceColor(int confidence) {
-    if (confidence >= 80) return AppColors.primaryGreen;
-    if (confidence >= 50) return AppColors.warning;
-    return AppColors.error;
   }
 
   String _formatTime(DateTime dt) {
@@ -265,10 +231,6 @@ class _HomeScreenState extends State<HomeScreen>
 
           // ── 48H COLLECTION PROGRESS ──────────────────────────────────────
           _buildCollectionProgressCard(),
-          const SizedBox(height: 16),
-
-          // ── LIVE HEARTBEAT CARD ──────────────────────────────────────────
-          _buildLiveHRCard(),
           const SizedBox(height: 16),
 
           // ── HR SUMMARY ───────────────────────────────────────────────────
@@ -744,152 +706,6 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLiveHRCard() {
-    final bool hasLiveBpm = _liveBpm > 0;
-    final Color heartColor =
-        hasLiveBpm ? AppColors.secondaryCoral : AppColors.textSecondary;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
-      decoration: BoxDecoration(
-        gradient: hasLiveBpm
-            ? LinearGradient(
-                colors: [
-                  AppColors.secondaryCoral.withOpacity(0.10),
-                  AppColors.secondaryCoral.withOpacity(0.03),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-            : null,
-        color: hasLiveBpm ? null : AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: hasLiveBpm
-              ? AppColors.secondaryCoral.withOpacity(0.25)
-              : AppColors.textSecondary.withOpacity(0.12),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              ScaleTransition(
-                scale: _heartScaleAnim,
-                child: Icon(
-                  hasLiveBpm ? Icons.favorite : Icons.favorite_border,
-                  color: heartColor,
-                  size: 40,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          hasLiveBpm ? '$_liveBpm' : '--',
-                          style: TextStyle(
-                            color: heartColor,
-                            fontSize: 40,
-                            fontWeight: FontWeight.bold,
-                            height: 1.0,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            hasLiveBpm ? 'BPM  ·  Live' : 'BPM',
-                            style: TextStyle(
-                              color: heartColor.withOpacity(0.7),
-                              fontSize: 13,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    if (hasLiveBpm)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: _heartZoneColor(_liveBpm).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          _heartZone(_liveBpm),
-                          style: TextStyle(
-                            color: _heartZoneColor(_liveBpm),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      )
-                    else
-                      Text(
-                        _isConnected ? 'Waiting for data...' : 'Watch not connected',
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (hasLiveBpm) ...[
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Icon(Icons.radio_button_checked,
-                        color: AppColors.primaryGreen, size: 12),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$_liveRecordsReceived',
-                      style: TextStyle(
-                        color: AppColors.primaryGreen,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const Text(
-                      'readings',
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 10),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-          if (_latestConfidence > 0) ...[
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Icon(Icons.sensors_rounded, size: 14, color: _confidenceColor(_latestConfidence)),
-                const SizedBox(width: 6),
-                Text(
-                  'Signal quality: $_latestConfidence%',
-                  style: TextStyle(
-                    color: _confidenceColor(_latestConfidence),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );
