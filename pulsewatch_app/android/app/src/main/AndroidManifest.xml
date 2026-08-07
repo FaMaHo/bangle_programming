@@ -20,16 +20,51 @@
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Lets WorkManager (lib/services/background_sync_service.dart) restore
+         the periodic watch-sync schedule after a reboot — without this, a
+         phone restart during a 48h session would silently stop background
+         syncing until the app was next opened by hand. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <!-- App-lock (fingerprint/face unlock) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
 
+    <!-- Foreground service: shown while interactively connected (and for
+         the few seconds a periodic background sync is actively talking to
+         the watch — see BleService.performBackgroundSync), so Android is
+         less eager to suspend the connection mid-use.
+         NOTE: this is a best-effort nicety, not the mechanism the app
+         depends on for not losing data over a 48h session — that guarantee
+         now comes from BackgroundSyncService's periodic WorkManager task,
+         which keeps working even if this service (or the whole app
+         process) gets killed. An earlier version of this app tried to hold
+         one connection open continuously for 48h backed only by this
+         service; that fights Android directly (Doze can still defer/drop
+         connections under a foreground service, and the service itself
+         isn't guaranteed to survive the app being swiped from Recents —
+         see https://github.com/Dev-hwang/flutter_foreground_task/issues/359),
+         so it was replaced rather than patched. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
     <application
         android:label="PulseWatch AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
+        <!-- Auto Backup was on by default (no allowBackup was set) with
+             nothing excluded. flutter_secure_storage's encrypted values are
+             tied to this install's Android Keystore key, which isn't part
+             of the backup — restoring old ciphertext onto a device with a
+             different/absent key throws instead of just failing to log in,
+             which is what left the app stuck on the loading screen. This
+             also means medical session data and auth tokens were eligible
+             to be backed up to the user's Google account by default, which
+             isn't appropriate for this app regardless of the crash. -->
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -51,6 +86,26 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Warning: do not change this service name — flutter_foreground_task
+             expects to find its own service at this exact class path.
+             foregroundServiceType="connectedDevice" is the type meant for
+             maintaining a connection to an external device like a BLE
+             wearable. Each run is now short (interactive session length, or
+             one bounded periodic sync — see the permission comment above),
+             so the Android 15 dataSync 6h/24h background-runtime cap that
+             originally motivated using connectedDevice over dataSync no
+             longer applies either way, but connectedDevice remains the
+             semantically correct type for what this service actually does. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
+
+        <!-- WorkManager's own receivers/providers (boot rescheduling, task
+             dispatch) are merged in automatically from the workmanager
+             plugin's own manifest — nothing to declare here beyond the
+             RECEIVE_BOOT_COMPLETED permission above. -->
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -62,6 +62,9 @@ last-known BLE device on resume.
 |---|---|
 | `auth_service.dart` | Enrollment/login/refresh, token storage via `flutter_secure_storage`. |
 | `ble_service.dart` | Scanning, connecting, parsing incoming Bangle.js/T-Watch data, BLE line reassembly (see below). Singleton (`BleService()` factory always returns the same instance). |
+| `background_sync_service.dart` | Schedules/cancels the periodic WorkManager task that syncs the watch when the app isn't open — see "Background sync" below. |
+| `sync_log_service.dart` | Persisted, capped log of connect/sync attempts (success/failure, stage, message) — see "Background sync" below. |
+| `connection_status_service.dart` | Persisted, isolate-safe record of the watch link's real state (connected/reconnecting/disconnected) — drives the live notification content and the interactive sync timer's staleness check. See "Background sync" below. |
 | `database_helper.dart` | Local SQLite (`sqflite`) — `heart_rate`, `accelerometer`, `sessions` tables. |
 | `hrv_feature_extractor.dart` | Computes the 22 HRV/accel features the AI model expects from a window of samples. |
 | `inference_service.dart` | Runs the on-device ONNX model (`assets/models/model.onnx`) to turn features into a risk score for one window. |
@@ -131,6 +134,227 @@ starting 5 minutes after connecting; that used too little data to be
 trustworthy (several features were always at training-set defaults) and
 produced unreliable high-risk false positives, so it was replaced with the
 full-session approach above.
+
+## Background sync
+
+The watch (`bangle/lib.js`) checkpoints buffered readings to flash every 5
+minutes on its own, independent of whether anything is connected
+(`CONFIG.saveInterval`). Getting that data onto the phone is split into two
+paths that both funnel through the same `BleService.connectToDevice()` /
+`syncDataFromWatch()` logic:
+
+```
+Interactive (app open)                  Background (app closed/backgrounded)
+────────────────────────                ─────────────────────────────────────
+User taps Connect, or                   WorkManager fires a periodic task
+app resumes from background             (~every 15 min, Android's enforced
+        │                                floor for periodic work)
+        ▼                                        │
+connectToDevice(autoConnect: …)                   ▼
+  fire-and-forget sync                  BleService.performBackgroundSync()
+  (device_screen shows a                  - no "am I already connected" check
+  "connecting…" spinner, so                 (see note below — every reported
+  a long backlog sync shouldn't              connection state turned out to
+  block it — see                            be a guess that real testing
+  transferProgressStream)                    proved unreliable)
+                                            - unconditionally: force-disconnect
+                                              via BluetoothDevice.fromId(id)
+                                              (works even though this isolate
+                                              never made the connection
+                                              itself) → NO scan (see note 4
+                                              below — the watch is bonded, so
+                                              BluetoothDevice.fromId(id) +
+                                              connect(autoConnect: true) hands
+                                              reconnection to Android's own
+                                              background whitelist scanning)
+                                              → AWAIT syncDataFromWatch() →
+                                              disconnect (awaitSync: true —
+                                              WorkManager needs a definite
+                                              pass/fail to decide whether to
+                                              back off and retry, unlike the
+                                              interactive
+                                              fire-and-forget path)
+```
+
+This — not the foreground service — is what bounds how far the phone can
+fall behind the watch: at most ~15-30 minutes, indefinitely, regardless of
+whether the app process or foreground service survives that long. It
+replaced an earlier design that tried to hold one BLE connection open
+continuously for the full 48h backed only by a foreground service; that
+fights Android directly (Doze can still defer/drop connections under a
+foreground service, and the service itself isn't guaranteed to survive the
+app being swiped from Recents), so on a real device it produced exactly the
+failure mode this section is meant to prevent — the watch recording ~2000
+readings over 48h while the phone only picked up the ~100 or so from the
+brief windows the app happened to be open. The foreground service still
+runs (for the UX benefit of a slightly stickier connection while
+interactively connected, and briefly during each background sync's bounded
+window — Android 12+ generally wants a foreground service around active BLE
+work triggered from the background), but a failure to start it is now
+logged and non-fatal rather than reported as a failed connection.
+
+Every stage of the connect → characteristics → sync → foreground-service
+pipeline in `connectToDevice()` is logged individually via
+`SyncLogService` (success or failure, with a specific message — not a
+generic "connection failed"), tagged with whether it came from an
+interactive or background attempt. `device_screen.dart` surfaces the most
+recent ~10 entries in an expandable "Sync diagnostics" card and shows the
+real failure reason in the connect snackbar, so a background failure that
+happened unattended is still diagnosable afterward without `adb logcat`.
+
+`RECEIVE_BOOT_COMPLETED` (declared in `AndroidManifest.xml`) lets
+WorkManager restore this schedule after the phone reboots mid-session.
+
+**Every "am I connected" signal turned out to be a guess, and every guess
+was eventually wrong — so `performBackgroundSync()` stopped asking.** This
+went through three iterations, each caught by real multi-hour device
+testing:
+
+1. **First bug**: `performBackgroundSync()` originally skipped its own
+   reconnect attempt whenever `FlutterForegroundTask.isRunningService` was
+   true, on the assumption that meant an interactive session already owned
+   the link. But the service was only ever stopped by an explicit
+   `disconnect()` call, so an *unexpected* drop (watch out of range,
+   OS/watch silently killing the GATT link) left a stale "Connected"
+   notification up for a connection that no longer existed — and every
+   periodic sync in between saw `isRunningService == true` and skipped,
+   producing multi-hour gaps bounded only by how long it took the user to
+   notice and reopen the app.
+
+   Fixed by replacing "service alive" with a real, persisted, isolate-safe
+   `WatchConnectionState` (`connection_status_service.dart`;
+   disconnected/connecting/connected/reconnecting), written by
+   `connectToDevice()`/its connectionState listener on every real
+   transition — `performBackgroundSync()` moved to checking that instead.
+
+2. **Second bug**: that state can itself lie. Android's BLE stack can keep
+   reporting a link as "connected" for hours after it's actually gone
+   silently dead — a zombie GATT client that answers connect()/
+   discoverServices() calls but never delivers notifications again, while
+   the watch keeps recording the entire time. `ConnectionStatusService.isStale()`
+   was added to catch this (no new DB reading in N minutes despite
+   believing we're connected ⇒ force a teardown+reconnect), and
+   `performBackgroundSync()`'s stale branch called `disconnect()` to tear
+   down the zombie link before retrying.
+
+   That teardown call was itself broken: `performBackgroundSync()` runs in
+   the WorkManager background isolate, which has its own fresh
+   `BleService()` singleton with its own empty `_connectedDevice` (always
+   `null` there — this isolate never made the connection itself, some
+   *other* isolate did, possibly hours earlier). `disconnect()`'s
+   `if (_connectedDevice != null)` guard was therefore always false in this
+   context, silently no-opping — Android was never actually told to release
+   the link. A real multi-hour test confirmed the failure mode exactly:
+   every background wake logged `isStale() == true`, "forcing a fresh
+   reconnect", and then a scan that found nothing, indefinitely — because
+   the watch, still genuinely connected at the native level, had stopped
+   advertising (a connected BLE peripheral normally does), so no scan could
+   ever find it. Interactive reconnects kept working throughout, because
+   that path runs in the *same* isolate that holds the real
+   `_connectedDevice` reference.
+
+   Fixed with `BluetoothDevice.fromId(savedId).disconnect()` — Android
+   tracks GATT connections by remote address, not Dart object identity, so
+   constructing a device reference from just the saved ID and disconnecting
+   *that* releases the same real link regardless of which isolate created
+   it or which isolate is now trying to tear it down.
+
+3. **Final simplification**: rather than trust *any* reported connection
+   state to decide whether background sync is safe to skip, it stopped
+   asking entirely. `performBackgroundSync()` no longer calls `isStale()`
+   or checks `WatchConnectionState` at all — every cycle unconditionally
+   force-disconnects (best-effort, harmless if there was nothing real to
+   tear down) and then attempts a fresh connect+sync. This isn't reckless:
+   SQLite's `UNIQUE(timestamp, device_id)` + insert-ignore
+   (`database_helper.dart`) and the watch's erase-only-after-confirmed-insert
+   already make repeated/overlapping sync attempts harmless, so there was
+   nothing the skip check was protecting against that isn't already handled
+   at the data layer — and removing it also removes the entire class of bug
+   that steps 1 and 2 were spent fixing. The one accepted tradeoff: if an
+   *interactive* session has a genuinely healthy connection open right now,
+   a background cycle's forced disconnect will briefly interrupt it — the
+   interactive side's own autoConnect + connectionState listener already
+   reconnects automatically within moments of any drop, planned or not, so
+   this is a brief hiccup rather than a lasting failure.
+
+`isStale()` is still used — just not by `performBackgroundSync()` anymore.
+The *interactive* sync timer (`BleService`'s 2-minute periodic re-sync
+while the app is open) still calls it to decide when to force its own
+watchdog reconnect, since that path genuinely does hold a live
+`_connectedDevice` reference and a real disconnect there is not a no-op.
+
+4. **The actual remaining problem: the watch was never bonded, so Android's
+   background scan throttling had free rein.** Even with steps 1-3 fixed
+   and verified on genuinely fresh code, live testing kept showing
+   `performBackgroundSync()` scan attempts fail with "not in range" —
+   sometimes seeing *zero* BLE devices of any kind in a 25s window (not
+   just missing the watch), while every interactive scan from the same
+   phone succeeded instantly. `adb shell dumpsys bluetooth_manager`
+   confirmed why: the watch never appeared in the phone's bonded-devices
+   list — every connection all along had been a bare, unbonded GATT
+   connection negotiated from scratch each time. This is the real
+   structural difference from how actual smartwatch companion apps (Fitbit,
+   Garmin, etc.) achieve reliable background sync: they bond/pair with the
+   phone, which lets Android's own low-power, whitelist-based background
+   scanning — built specifically for reconnecting to known/bonded
+   companion devices — handle reconnection at the native Bluetooth stack
+   level. An unbonded device gets none of that; it's subject to the same
+   aggressive background-scan throttling as any ad-hoc device discovery.
+
+   Fixed with two changes:
+   - `connectToDevice()` now calls `device.createBond()` (idempotent — a
+     no-op once already bonded) after every successful connect, so the
+     watch becomes a known/bonded device from the very first successful
+     interactive connect onward. This shows Android's system pairing
+     prompt the first time it runs — Bangle.js uses "Just Works" BLE
+     pairing (no PIN), so it's a simple confirmation, not a code-entry
+     flow.
+   - `performBackgroundSync()` no longer scans at all. It constructs a
+     `BluetoothDevice` directly from the saved remote ID
+     (`BluetoothDevice.fromId(savedId)` — no discovery needed to build this
+     reference) and calls `connectToDevice(..., autoConnect: true)`
+     directly, handing reconnection entirely to Android's native
+     `autoConnect` mechanism rather than an app-initiated `startScan()`.
+     The autoConnect wait is a separate, longer timeout
+     (`autoConnectTimeout`, 60s for background vs. the 15s interactive
+     default) since it now has to cover Android's own background
+     whitelist-scan latency, not just a GATT handshake with an
+     already-discovered device — still comfortably within WorkManager's
+     4-minute hard ceiling.
+
+   Verified on a real device after this fix: 3 consecutive background
+   syncs succeeded, each firing right on WorkManager's ~15-minute
+   schedule, connecting within 9-28 seconds of waking — the first genuine
+   background-sync successes of the entire debugging session.
+
+A few more follow-on changes came out of this same testing round:
+
+- **Immediate OS-level reconnect on an unexpected drop.** Previously
+  nothing attempted to reconnect until either the user reopened the app or
+  the next WorkManager tick (up to ~15-30 min later) — the listener now
+  re-issues `device.connect(autoConnect: true)` the instant a drop is
+  detected, which doesn't poll/scan, just registers with the Android
+  Bluetooth stack to complete the moment the watch is back in range.
+- **The foreground service is now a live, continuously-running status
+  board**, not a one-shot banner. It stays up from first connect until an
+  explicit `disconnect()` (default `stopForegroundService: true`) —
+  `performBackgroundSync()` passes `stopForegroundService: false` so its
+  end-of-cycle disconnect only drops the radio, not the notification.
+  `ConnectionStatusService.updateNotification()` refreshes the title/text
+  on every state change and, via `foreground_task_handler.dart`'s
+  `onRepeatEvent` (every 60s), keeps "last reading Xm ago" current even
+  when nothing else changes — replacing what the user correctly identified
+  as a hardcoded notification that never reflected real state.
+- **Proof the background task actually fires.** `background_sync_service.dart`
+  now logs an unconditional `SyncStage.wake` entry the instant WorkManager
+  invokes the task, before any skip/connect decision — every other log
+  entry only appears once real work is attempted, which made "is the OS
+  even waking this up on schedule" unanswerable from the log alone.
+
+`device_screen.dart` surfaces `DatabaseHelper.findGaps()` (readings
+grouped by consecutive gaps ≥5 min, over the last 6h) directly in the app —
+the same kind of gap that was previously only discoverable by opening an
+exported session CSV after the fact.
 
 ## Auth model
 

@@ -7,7 +7,7 @@ asking "why do we have this" or "how does this work" — this doc is the answer.
 
 | File | Runs when | Job |
 |---|---|---|
-| `lib.js` | `require("pulsewatch")` is called | The actual recording engine — HRM listener, buffering, file saving, BLE streaming |
+| `lib.js` | `require("pulsewatch")` is called | The actual recording engine — HRM listener, buffering, file saving |
 | `boot.js` | Every time the watch boots | Decides whether to auto-load `lib.js`, based on a saved setting |
 | `widget.js` | Every time the watch boots | Draws the green recording dot, and *also* loads `lib.js` if recording is enabled |
 | `app.js` | User opens the PulseWatch app from the launcher | Shows the settings/status menu (start/stop, files, storage used, etc.) |
@@ -50,10 +50,8 @@ boot.js / widget.js check pulsewatch.json's "recording" flag
 ```
 exports.start()                              exports.stop()
   │                                             │
-  ├─ Bangle.on('HRM', onHRM)                    ├─ clearInterval(liveFlushTimer)
-  ├─ Bangle.setHRMPower(1, "pulsewatch")        ├─ flushLiveBuffer()  (send anything queued)
-  └─ setInterval(flushLiveBuffer, 15s)          ├─ saveData()         (flush to flash)
-                                                 ├─ Bangle.removeListener('HRM', onHRM)
+  ├─ Bangle.on('HRM', onHRM)                    ├─ saveData()         (flush to flash)
+  └─ Bangle.setHRMPower(1, "pulsewatch")        ├─ Bangle.removeListener('HRM', onHRM)
                                                  └─ Bangle.setHRMPower(0, "pulsewatch")
 ```
 
@@ -62,35 +60,49 @@ on. Each call:
 1. Reads the current accelerometer reading (`Bangle.getAccel()`)
 2. Builds a data point: timestamp, BPM, RR interval (if the sensor reported
    one — falls back to `0` if not), confidence, and the three accel axes
-3. Pushes it into **two** separate buffers — see below
+3. Pushes it into `dataBuffer`
 
-## Two buffers, two purposes
+## One buffer, one purpose
 
 - **`dataBuffer`** — accumulates until `saveInterval` (5 minutes) has
   elapsed, then `saveData()` writes it to a new `pw<timestamp>.csv` file in
   flash and clears the buffer. This is the durable, full-fidelity copy —
-  it exists regardless of whether a phone is connected over BLE at all.
-- **`liveBuffer`** — accumulates until `liveFlushInterval` (15 seconds) has
-  elapsed, then `flushLiveBuffer()` sends everything queued as one
-  multi-line BLE transmission and clears the buffer.
+  it exists regardless of whether a phone is connected over BLE at all, and
+  it's the *only* copy: there used to also be a `liveBuffer` that batch-sent
+  samples over BLE every 15s for a live phone-side UI, but that added a
+  second code path (and a live-vs-file-sync disambiguation hack on the phone
+  side, since live and file-echoed data are byte-identical in shape) for a
+  feature that wasn't load-bearing for the actual risk-score pipeline. Data
+  now reaches the phone exclusively via the file-sync flow below.
 
-They're deliberately separate: the flash buffer is the ground truth (synced
-later via the app's file-transfer flow), while the live buffer is a
-best-effort, low-latency feed for the phone's live UI and on-device risk
-scoring. Batching the live buffer instead of sending one BLE packet per
-sample (the old behavior) cuts radio wake-ups roughly 15x, since a BLE
-transmission's fixed per-event overhead is far more expensive than just
-holding 15 seconds of readings in RAM.
+  `saveData()` writes with a single plain `Storage.write(filename, csvText)`
+  call — not `Storage.open(filename, "w")` (`StorageFile`, a *chunked*
+  writer). This matters a lot: `StorageFile` stores content under
+  `"<filename>\1"`, `"\2"`, etc. — Espruino appends a raw chunk-number byte
+  as the file's last character — and `Storage.list()`'s default output
+  includes that suffix, which silently broke every `.csv$`-anchored regex
+  in this codebase (this file, `app.js`'s status menu, and the phone's
+  sync request all use one). The old code wrote real files that permanently
+  consumed flash and were never found, read, or erased by anything,
+  because nothing could match a name that didn't cleanly end in `.csv`. A
+  plain write avoids chunking entirely — comfortably, since a single
+  5-minute buffer is at most ~300 rows (~12KB), far under any real size
+  limit that would justify `StorageFile`. `cleanupGhostStorageFiles()`
+  (runs once, automatically, the first time this fixed `lib.js` loads —
+  gated by a flag in `pulsewatch.json` so it never re-scans after
+  succeeding) finds and erases any files written by the old buggy code,
+  using `Storage.list(regex, {sf: true})` to explicitly ask for
+  `StorageFile`-flagged entries the default listing can't see.
 
 ## Why the app needs to reassemble BLE data
 
 A single CSV line (`1702396800123,72,833,85,100,-50,980`, ~30-40 characters)
-routinely exceeds one BLE notification's payload size. `Bluetooth.println()`
-on this side doesn't guarantee one notification per line — the phone side
+routinely exceeds one BLE notification's payload size. The phone side
 (`ble_service.dart`) has to buffer incoming bytes and only process complete,
 `\n`-terminated lines, carrying over any partial line to the next
-notification. This matters more now that `flushLiveBuffer()` sends up to 15
-lines in a single call.
+notification — this applies to the file-sync read response (a whole file's
+content, printed line by line), which is now the only thing arriving over
+this characteristic besides command echoes.
 
 ## Auto-start when the phone connects
 
@@ -109,7 +121,6 @@ side at all, it's the phone telling the watch to start once it's paired.
 ```js
 const CONFIG = {
   saveInterval: 5 * 60 * 1000,      // how often to flush dataBuffer to flash
-  liveFlushInterval: 15 * 1000,     // how often to batch-send liveBuffer over BLE
   appName: "pulsewatch"
 };
 ```
@@ -120,6 +131,15 @@ Via the Bangle.js Web IDE console:
 
 ```js
 require('Storage').list(/^pw/)                 // list all data files
-require('Storage').open('pw1702396800123.csv', 'r').read(1000)  // read a file
+require('Storage').read('pw1702396800123.csv')  // read a file
 require('Storage').readJSON('pulsewatch.json')  // check recording settings
+require('Storage').list(/^pw/, {sf: true})      // list any pre-fix ghost StorageFile chunks
 ```
+
+## Version
+
+`VERSION` at the top of `lib.js` is logged as `PulseWatch vX.XX loaded`
+every time the library loads — keep it in sync with `metadata.json`'s
+`"version"` and the top `ChangeLog` entry. This is what makes "which
+firmware is actually on the watch" answerable from the BLE console instead
+of inferred from behavior.

@@ -1,3 +1,48 @@
+0.07: Fix saveData() so files are actually findable, plus ghost-file cleanup (2026-08-06)
+- CRITICAL FIX: saveData() used Storage.open()/StorageFile (chunked writes)
+  instead of a plain Storage.write(). Espruino appends a raw chunk-number
+  byte as the last character of a StorageFile's stored name, which broke
+  every `.csv$`-anchored regex in this app (watch's own status menu,
+  deleteAllData(), and the phone's file-sync request) - files were written
+  successfully and permanently consumed flash, but Storage.list() could
+  never find them, so nothing was ever synced to the phone or erased from
+  the watch. This is why "Data Files" always showed 0 even as "Total
+  Records" kept climbing. saveData() now does a single plain
+  Storage.write(filename, csvText) - per-flush data is at most ~300 rows
+  (~12KB), comfortably within one write, no chunking needed
+- NEW: one-time migration (cleanupGhostStorageFiles(), runs automatically
+  on first load of this version, gated by a pulsewatch.json flag) finds and
+  erases pre-fix StorageFile ghost chunks left behind by the bug above
+- FIXED: deleteAllData() had the same list() blind spot - "delete all" now
+  actually erases StorageFile ghost chunks too, not just plain files
+- Runtime console now logs "PulseWatch vX.XX loaded" on every load, so the
+  BLE console/log immediately shows which firmware version is actually
+  running on the watch - this exact question ate significant debugging
+  time this session
+- Removed a few leftover confused debugging comments in app.js/boot.js/
+  lib.js and a genuinely-unused `storageFile` variable
+
+0.06: Remove live BLE streaming, file-sync is now the only data path (2026-08-05)
+- REMOVED: liveBuffer/flushLiveBuffer/liveFlushTimer and the 15s batched
+  BLE transmission in exports.start()/stop()/reload()
+- Live streaming wasn't load-bearing for the phone's risk-score pipeline
+  and added a second code path (plus a live-vs-file-sync disambiguation
+  hack on the phone side, since the two were byte-identical in shape)
+- dataBuffer (the 5-minute flash-backed buffer written by saveData()) is
+  unaffected - the watch keeps recording to pw*.csv exactly as before,
+  the phone now only ever receives data through the existing file-sync
+  flow
+- FIXED: app-icon.js had broken syntax (";" instead of ":" in the image
+  descriptor object) - would have thrown on the watch if ever loaded
+- Wired app-icon.js in as the actual launcher icon: metadata.json now
+  evaluates it into a "pulsewatch.img" storage entry, and "icon":"app.png"
+  is set for the App Loader listing thumbnail. Previously neither was
+  referenced anywhere, so the app installed and ran with no icon
+- metadata.json storage now lists 5 files instead of 4 - when using
+  "Install App from Files", app-icon.js must be selected alongside
+  app.js, lib.js, boot.js, widget.js, and metadata.json, or the icon
+  entry will be uploaded with no content
+
 0.05: Persist recording flag on start()/stop() (2026-07-25)
 - FIXED: exports.start()/stop() now write recording:true/false to
   pulsewatch.json, not just the in-memory isRecording flag
