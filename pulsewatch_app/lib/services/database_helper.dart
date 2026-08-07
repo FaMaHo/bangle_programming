@@ -345,35 +345,6 @@ class DatabaseHelper {
     return csv.toString();
   }
   
-  // Get database statistics
-  Future<Map<String, dynamic>> getDatabaseStats() async {
-    final db = await database;
-    
-    final hrCount = await db.rawQuery('SELECT COUNT(*) as count FROM heart_rate');
-    final accelCount = await db.rawQuery('SELECT COUNT(*) as count FROM accelerometer');
-    
-    final firstHR = await db.rawQuery('SELECT MIN(timestamp) as first FROM heart_rate');
-    final lastHR = await db.rawQuery('SELECT MAX(timestamp) as last FROM heart_rate');
-    
-    int? firstTimestamp = firstHR.first['first'] as int?;
-    int? lastTimestamp = lastHR.first['last'] as int?;
-    
-    return {
-      'total_hr_readings': Sqflite.firstIntValue(hrCount) ?? 0,
-      'total_accel_readings': Sqflite.firstIntValue(accelCount) ?? 0,
-      'first_reading': firstTimestamp != null 
-          ? DateTime.fromMillisecondsSinceEpoch(firstTimestamp).toString()
-          : null,
-      'last_reading': lastTimestamp != null
-          ? DateTime.fromMillisecondsSinceEpoch(lastTimestamp).toString()
-          : null,
-      'duration_hours': firstTimestamp != null && lastTimestamp != null
-          ? (lastTimestamp - firstTimestamp) / (1000 * 60 * 60)
-          : 0,
-    };
-  }
-
-
   Future<List<int>> getNocturnalHR() async {
     final db = await database;
     final now = DateTime.now();
