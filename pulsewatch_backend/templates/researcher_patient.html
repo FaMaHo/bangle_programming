@@ -8,27 +8,52 @@
   <p class="subtitle">{{ patient.username }} · enrolled {{ patient.created_at[:10] }}</p>
   {% endif %}
 
+  {% if deleted_message %}
+  <div class="success-box">{{ deleted_message }}</div>
+  {% endif %}
+
   {% if sessions %}
+  <form method="POST" id="bulk-delete-form" action="{{ url_for('researcher_delete_sessions', patient_id=patient_id) }}" onsubmit="return confirm('Delete the selected sessions? This cannot be undone.');"></form>
   <table>
     <thead>
       <tr>
+        <th><input type="checkbox" onclick="document.querySelectorAll('.session-checkbox').forEach(c => c.checked = this.checked)"></th>
         <th>Session</th>
+        <th>Uploaded</th>
         <th>Files</th>
+        <th></th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for s in sessions %}
       <tr>
+        <td><input class="session-checkbox" type="checkbox" name="session_ids" value="{{ s.session_id }}" form="bulk-delete-form"></td>
         <td><code>{{ s.session_id }}</code></td>
+        <td class="muted">{{ s.date or '—' }}</td>
         <td class="muted">{{ s.file_count }} file{{ 's' if s.file_count != 1 else '' }}</td>
         <td>
           <a href="{{ url_for('researcher_download_session', patient_id=patient_id, session_id=s.session_id) }}">Download CSV →</a>
+        </td>
+        <td>
+          <form method="POST" action="{{ url_for('researcher_delete_session', patient_id=patient_id, session_id=s.session_id) }}" onsubmit="return confirm('Delete this session? This cannot be undone.');" style="display:inline;">
+            <button type="submit" style="background:none;border:none;color:var(--error);cursor:pointer;font-size:13px;padding:0;font-weight:600;">Delete</button>
+          </form>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <div style="margin-top:16px;">
+    <button type="submit" form="bulk-delete-form" class="button secondary" style="width:auto; padding:10px 18px; color:var(--error); border-color:var(--error);">Delete selected sessions</button>
+  </div>
+
+  <div style="margin-top:32px; padding-top:20px; border-top:1px solid var(--border);">
+    <p class="muted" style="margin-bottom:10px; text-transform:uppercase; letter-spacing:0.5px;">Danger zone</p>
+    <form method="POST" action="{{ url_for('researcher_delete_all_data', patient_id=patient_id) }}" onsubmit="return confirm('Delete ALL uploaded data for this patient? This cannot be undone.');">
+      <button type="submit" class="button secondary" style="width:auto; padding:10px 18px; color:var(--error); border-color:var(--error);">Delete all data for this patient</button>
+    </form>
+  </div>
   {% else %}
   <p>No sessions uploaded yet.</p>
   {% endif %}

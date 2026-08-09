@@ -11,6 +11,7 @@ from flask import (
 )
 import os
 import secrets
+import shutil
 import sys
 import io
 import base64
@@ -106,6 +107,28 @@ def researcher_required(fn):
             return jsonify({'error': 'Researcher access required'}), 403
         return fn(*args, **kwargs)
     return wrapper
+
+
+def _safe_patient_session_path(patient_id, session_id):
+    """Resolve patient_data/<patient_id>/<session_id>, refusing to return a
+    path outside that patient's folder — session_id/patient_id land here
+    from URL segments and form fields, so a '../' can't be trusted blindly."""
+    patient_root = os.path.abspath(os.path.join(UPLOAD_FOLDER, patient_id))
+    session_path = os.path.abspath(os.path.join(patient_root, session_id))
+    if os.path.commonpath([patient_root, session_path]) != patient_root:
+        return None
+    return session_path
+
+
+def _session_upload_date(session_path):
+    """Earliest file mtime in a session folder, as the date a researcher
+    would recognize as 'when this was uploaded'."""
+    try:
+        entries = [os.path.join(session_path, f) for f in os.listdir(session_path)]
+        mtimes = [os.path.getmtime(p) for p in entries] or [os.path.getmtime(session_path)]
+        return datetime.fromtimestamp(min(mtimes)).strftime('%Y-%m-%d %H:%M')
+    except OSError:
+        return None
 
 
 def researcher_web_required(fn):
@@ -384,14 +407,60 @@ def researcher_patient_detail(patient_id):
             session_path = os.path.join(patient_path, session_id)
             if os.path.isdir(session_path):
                 csv_files = [f for f in os.listdir(session_path) if f.endswith('.csv')]
-                sessions.append({'session_id': session_id, 'file_count': len(csv_files)})
+                sessions.append({
+                    'session_id': session_id,
+                    'file_count': len(csv_files),
+                    'date': _session_upload_date(session_path),
+                })
+
+    deleted_count = request.args.get('deleted_count')
+    if deleted_count == 'all':
+        deleted_message = 'All uploaded data for this patient has been deleted.'
+    elif deleted_count:
+        deleted_message = f'{deleted_count} session(s) deleted.'
+    elif request.args.get('deleted'):
+        deleted_message = f"Session {request.args.get('deleted')} deleted."
+    else:
+        deleted_message = None
 
     return render_template(
         'researcher_patient.html',
         patient_id=patient_id,
         patient=patient,
         sessions=sessions,
+        deleted_message=deleted_message,
     )
+
+
+@app.route('/researcher/patient/<patient_id>/session/<session_id>/delete', methods=['POST'])
+@researcher_web_required
+def researcher_delete_session(patient_id, session_id):
+    session_path = _safe_patient_session_path(patient_id, session_id)
+    if session_path and os.path.isdir(session_path):
+        shutil.rmtree(session_path)
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted=session_id))
+
+
+@app.route('/researcher/patient/<patient_id>/sessions/delete', methods=['POST'])
+@researcher_web_required
+def researcher_delete_sessions(patient_id):
+    session_ids = request.form.getlist('session_ids')
+    deleted = 0
+    for session_id in session_ids:
+        session_path = _safe_patient_session_path(patient_id, session_id)
+        if session_path and os.path.isdir(session_path):
+            shutil.rmtree(session_path)
+            deleted += 1
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted_count=deleted))
+
+
+@app.route('/researcher/patient/<patient_id>/delete-all', methods=['POST'])
+@researcher_web_required
+def researcher_delete_all_data(patient_id):
+    patient_path = _safe_patient_session_path(patient_id, '.')
+    if patient_path and os.path.isdir(patient_path):
+        shutil.rmtree(patient_path)
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted_count='all'))
 
 
 @app.route('/researcher/patient/<patient_id>/session/<session_id>/download')
