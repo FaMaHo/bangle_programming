@@ -63,13 +63,17 @@ class DatabaseHelper {
     // read/write without blocking as aggressively as SQLite's default
     // rollback-journal mode, and recovers cleanly from an abrupt process
     // kill instead of needing hot-journal rollback on next open.
-    await db.execute('PRAGMA journal_mode=WAL');
+    //
+    // Both PRAGMAs return their new value as a result row, and Android's
+    // SQLiteDatabase.execSQL (what db.execute maps to) rejects any SQL
+    // that returns results, so these must go through rawQuery instead.
+    await db.rawQuery('PRAGMA journal_mode=WAL');
     // Per-connection, so this has to be set on every open (unlike
     // journal_mode, which is stored in the file itself): if the other
     // isolate's connection IS mid-write, wait and retry at the SQLite
     // level for up to 15s instead of failing/surfacing "database is
     // locked" immediately.
-    await db.execute('PRAGMA busy_timeout=15000');
+    await db.rawQuery('PRAGMA busy_timeout=15000');
 
     return db;
   }
@@ -457,11 +461,12 @@ class DatabaseHelper {
   }
 
   /// Per-hour mean BPM and mean signal confidence for the last [hours]
-  /// hours — the Insights screen's trend chart and wear-time timeline are
-  /// both built from this, at the same hourly resolution, so a gap or
-  /// weak-signal block in the timeline lines up exactly with the matching
-  /// break/dip in the HR line above it. A missing hour bucket (absent from
-  /// the returned list) means literally nothing was recorded that hour.
+  /// hours — the Insights screen's wear-time timeline is built from this.
+  /// The trend chart itself uses getHrRangeSamples below at a finer
+  /// resolution; this stays hourly because "which hour had a gap or weak
+  /// signal" is the actual question the timeline answers. A missing hour
+  /// bucket (absent from the returned list) means literally nothing was
+  /// recorded that hour.
   Future<List<HourlySample>> getHourlySamples(int hours) async {
     final db = await database;
     final cutoff = DateTime.now()
@@ -479,6 +484,37 @@ class DatabaseHelper {
               hourBucket: r['hour_bucket'] as int,
               meanBpm: (r['mean_bpm'] as num).toDouble(),
               meanConfidence: (r['mean_confidence'] as num?)?.toDouble(),
+              count: r['n'] as int,
+            ))
+        .toList();
+  }
+
+  /// Mean/min/max BPM per [bucketMinutes]-wide bucket for the last [hours]
+  /// hours — the Insights trend chart's data source. Finer than
+  /// getHourlySamples (30 min vs 1 hour by default) so a session with only
+  /// a handful of hours still has enough points to look like a real curve,
+  /// and the min/max spread lets a brief spike or dip inside a bucket show
+  /// up as the band widening instead of being averaged away to a flat
+  /// line. A missing bucket means nothing was recorded in that window.
+  Future<List<HrRangeSample>> getHrRangeSamples(int hours, {int bucketMinutes = 30}) async {
+    final db = await database;
+    final bucketMs = bucketMinutes * 60000;
+    final cutoff = DateTime.now()
+        .subtract(Duration(hours: hours))
+        .millisecondsSinceEpoch;
+    final result = await db.rawQuery(
+      'SELECT (timestamp / ?) AS bucket, AVG(bpm) AS mean_bpm, '
+      'MIN(bpm) AS min_bpm, MAX(bpm) AS max_bpm, COUNT(*) AS n '
+      'FROM heart_rate WHERE timestamp >= ? '
+      'GROUP BY bucket ORDER BY bucket ASC',
+      [bucketMs, cutoff],
+    );
+    return result
+        .map((r) => HrRangeSample(
+              bucketStart: DateTime.fromMillisecondsSinceEpoch((r['bucket'] as int) * bucketMs),
+              meanBpm: (r['mean_bpm'] as num).toDouble(),
+              minBpm: (r['min_bpm'] as num).toDouble(),
+              maxBpm: (r['max_bpm'] as num).toDouble(),
               count: r['n'] as int,
             ))
         .toList();
@@ -674,6 +710,24 @@ class HourlySample {
     required this.hourBucket,
     required this.meanBpm,
     required this.meanConfidence,
+    required this.count,
+  });
+}
+
+/// One bucket's worth of HR data at whatever resolution the caller asked
+/// for — see [DatabaseHelper.getHrRangeSamples].
+class HrRangeSample {
+  final DateTime bucketStart;
+  final double meanBpm;
+  final double minBpm;
+  final double maxBpm;
+  final int count;
+
+  HrRangeSample({
+    required this.bucketStart,
+    required this.meanBpm,
+    required this.minBpm,
+    required this.maxBpm,
     required this.count,
   });
 }

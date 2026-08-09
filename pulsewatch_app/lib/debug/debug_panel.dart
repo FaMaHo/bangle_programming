@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../services/ble_service.dart';
+import '../services/sync_log_service.dart';
 import '../theme/app_theme.dart';
 import 'debug_data_seeder.dart';
 
@@ -30,11 +31,36 @@ class DebugPanel extends StatefulWidget {
 class _DebugPanelState extends State<DebugPanel> {
   bool _busy = false;
 
+  // Raw connection/sync attempt log — moved here from the patient-facing
+  // Device screen since it's developer/QA detail (stage, source, exact
+  // error message), not something a study participant needs to see.
+  List<SyncLogEntry> _recentSync = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSyncLog();
+  }
+
+  Future<void> _loadSyncLog() async {
+    final log = await SyncLogService.instance.recent(limit: 10);
+    if (mounted) setState(() => _recentSync = log);
+  }
+
+  String _relativeTime(DateTime time) {
+    final diff = DateTime.now().difference(time);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
   Future<void> _run(Future<void> Function() action, String doneLabel) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
       await action();
+      await _loadSyncLog(); // a connect/sync action may have added an entry
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(doneLabel), duration: const Duration(seconds: 2)),
@@ -139,12 +165,63 @@ class _DebugPanelState extends State<DebugPanel> {
                     () => DebugDataSeeder.clearAll(),
                     destructive: true,
                   ),
+                  _section('Sync diagnostics'),
+                  _buildSyncLog(),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSyncLog() {
+    if (_recentSync.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: Text(
+          'Nothing logged yet — connect to a watch to start.',
+          style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        for (final e in _recentSync)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: e.success ? AppColors.primaryGreen : AppColors.error,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${e.stage} · ${e.source == SyncSource.background ? "Background" : "App"} · '
+                        '${_relativeTime(e.timestamp)}',
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(e.message, style: const TextStyle(color: AppColors.textPrimary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

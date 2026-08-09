@@ -96,6 +96,17 @@ void callbackDispatcher() {
           // shouldn't fail the whole background task.
         }
 
+        // Independent of upload consent — this is about whether the app
+        // can keep recording at all, not about the research server.
+        try {
+          if (await BleService().isBatteryExemptionRevoked()) {
+            await NotificationService.initialize();
+            await NotificationService.sendBatteryExemptionRevokedAlert();
+          }
+        } catch (_) {
+          // Same reasoning as above.
+        }
+
         return Future.value(syncOk);
       default:
         return Future.value(true);

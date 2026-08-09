@@ -18,6 +18,17 @@ class NotificationService {
   // isolates.
   static const _uploadAlertCooldown = Duration(hours: 3);
 
+  static const _kPermissionAsked = 'notification_permission_asked';
+
+  // Plugin/channel setup only — deliberately does NOT request the OS
+  // permission (that used to happen here, unconditionally, the instant
+  // Home first rendered — a bare system dialog with zero explanation of
+  // why a heart-rate app wants to send notifications). The actual request
+  // now happens once, explicitly, from the first-run prompts sequence in
+  // main.dart, after a rationale sheet. Safe to call repeatedly (channel
+  // creation is idempotent) — also called from the background isolate,
+  // where requesting permission would be a no-op anyway (no foreground
+  // Activity to show a system dialog from).
   static Future<void> initialize() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const settings = InitializationSettings(android: android);
@@ -35,16 +46,41 @@ class NotificationService {
       description: 'Lets you know when your data needs attention to reach the research server',
       importance: Importance.high,
     );
+    const backgroundChannel = AndroidNotificationChannel(
+      'background_alerts',
+      'Background Running Alerts',
+      description: 'Lets you know if your phone has stopped PulseWatch from recording in the background',
+      importance: Importance.high,
+    );
     final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(riskChannel);
     await androidPlugin?.createNotificationChannel(uploadChannel);
-
-    if (Platform.isAndroid) {
-      await androidPlugin?.requestNotificationsPermission();
-    }
+    await androidPlugin?.createNotificationChannel(backgroundChannel);
 
     print('[NotificationService] initialized');
+  }
+
+  /// Whether the one-time permission rationale has already been shown
+  /// (regardless of the answer) — mirrors the ask-once pattern used for
+  /// biometric lock and the battery-exemption prompt.
+  static Future<bool> hasAskedPermission() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kPermissionAsked) ?? false;
+  }
+
+  static Future<void> markPermissionAsked() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kPermissionAsked, true);
+  }
+
+  /// Fires the actual OS permission dialog — call only after showing the
+  /// user why (see main.dart's first-run prompts sequence).
+  static Future<void> requestPermission() async {
+    if (!Platform.isAndroid) return;
+    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.requestNotificationsPermission();
   }
 
   static Future<void> sendRiskAlert(double score) async {
@@ -110,7 +146,7 @@ class NotificationService {
   }
 
   static Future<void> sendConnectivityAlert() async {
-    if (!await _uploadCooldownElapsed('last_connectivity_alert_ms')) return;
+    if (!await _alertCooldownElapsed('last_connectivity_alert_ms')) return;
     await _showUploadNotification(
       id: 3,
       title: 'No connection',
@@ -120,16 +156,44 @@ class NotificationService {
   }
 
   static Future<void> sendUploadBacklogAlert() async {
-    if (!await _uploadCooldownElapsed('last_backlog_alert_ms')) return;
+    if (!await _alertCooldownElapsed('last_backlog_alert_ms')) return;
     await _showUploadNotification(
       id: 4,
       title: 'Your data needs uploading',
       body: "PulseWatch hasn't been able to reach the server in a while. "
-          'Open the app to upload manually.',
+          'Open Settings to upload manually.',
     );
   }
 
-  static Future<bool> _uploadCooldownElapsed(String prefKey) async {
+  /// Fired from the periodic background task (background_sync_service.dart)
+  /// when the battery-optimization exemption the user already granted has
+  /// stopped being in effect — see BleService.isBatteryExemptionRevoked for
+  /// why this can happen without the user ever touching the setting
+  /// themselves.
+  static Future<void> sendBatteryExemptionRevokedAlert() async {
+    if (!await _alertCooldownElapsed('last_battery_revoked_alert_ms')) return;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'background_alerts',
+        'Background Running Alerts',
+        channelDescription:
+            'Lets you know if your phone has stopped PulseWatch from recording in the background',
+        importance: Importance.high,
+        priority: Priority.high,
+        icon: '@mipmap/ic_launcher',
+      ),
+    );
+    await _plugin.show(
+      6,
+      'Background recording may be paused',
+      "Your phone's battery settings changed and could interrupt your "
+          'session. Open PulseWatch to fix it.',
+      details,
+    );
+    print('[NotificationService] sent battery-exemption-revoked alert');
+  }
+
+  static Future<bool> _alertCooldownElapsed(String prefKey) async {
     final prefs = await SharedPreferences.getInstance();
     final lastMs = prefs.getInt(prefKey);
     final now = DateTime.now();
