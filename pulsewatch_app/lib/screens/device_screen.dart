@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../services/ble_service.dart';
 import '../services/database_helper.dart';
 import '../services/sync_log_service.dart';
+import '../widgets/app_bottom_sheet.dart';
 
 class DeviceScreen extends StatefulWidget {
   const DeviceScreen({super.key});
@@ -23,23 +24,19 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
-  int _totalReadings = 0;
   int _latestConfidence = 0;
   Timer? _statsTimer;
-
-  // Diagnostics — see sync_log_service.dart. Surfaced here so a failure
-  // (especially one that happened unattended in the background) can be
-  // read directly in the app instead of needing `adb logcat`.
-  List<SyncLogEntry> _recentSync = [];
-  bool _diagnosticsExpanded = false;
 
   // Reading timeline — see DatabaseHelper.findGaps. Answers "is data
   // actually arriving right now" and "were there gaps like the ones found
   // in exported session CSVs" directly in the app, live, instead of only
-  // being discoverable afterward by eyeballing a downloaded file.
+  // being discoverable afterward by eyeballing a downloaded file. Sync
+  // diagnostics (raw connection/sync attempt logs) used to live on this
+  // screen too, but that's developer-flavored detail a study participant
+  // has no use for — it now lives in the debug panel (see debug_panel.dart)
+  // instead of cluttering the patient-facing screen.
   DateTime? _lastReadingTime;
   List<ReadingGap> _recentGaps = [];
-  bool _gapsExpanded = false;
   static const _gapThreshold = Duration(minutes: 5);
   static const _gapLookback = Duration(hours: 6);
 
@@ -83,9 +80,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _loadStats() async {
-    final total = await DatabaseHelper.instance.getTotalReadings();
     final confidence = await DatabaseHelper.instance.getLatestConfidence();
-    final syncLog = await SyncLogService.instance.recent(limit: 10);
     final lastReading = await DatabaseHelper.instance.getLastReadingTime();
     final gaps = await DatabaseHelper.instance.findGaps(
       threshold: _gapThreshold,
@@ -93,16 +88,39 @@ class _DeviceScreenState extends State<DeviceScreen> {
     );
     if (mounted) {
       setState(() {
-        _totalReadings = total;
         _latestConfidence = confidence;
-        _recentSync = syncLog;
         _lastReadingTime = lastReading;
         _recentGaps = gaps;
       });
     }
   }
 
+  // Scanning is what actually triggers the OS Bluetooth (and, on Android
+  // <12 only, Location — capped out of the manifest for newer versions,
+  // see AndroidManifest.xml) permission dialogs. Bluetooth is the one
+  // reason that's true on every version, so it's the only one named here
+  // rather than caveating an old-Android technicality most users will
+  // never hit. Explained once, the first time, rather than letting the
+  // bare system dialog be the first thing the user sees. Declining here
+  // skips the scan entirely rather than firing the OS dialog anyway; a
+  // second tap on "Scan for Devices" won't re-show this, matching the
+  // app's other one-time rationale prompts.
   Future<void> _startScan() async {
+    if (await _bleService.needsBleScanRationale()) {
+      if (!mounted) return;
+      final proceed = await showAppConfirmSheet(
+        context: context,
+        icon: Icons.bluetooth_searching_rounded,
+        iconColor: AppColors.primaryGreen,
+        title: 'Connect your watch',
+        body: 'Bluetooth lets PulseWatch talk to your watch.',
+        primaryLabel: 'Allow',
+        secondaryLabel: 'Not now',
+      );
+      await _bleService.markBleScanRationaleShown();
+      if (proceed != true) return;
+    }
+
     bool isOn = await _bleService.isBluetoothOn();
     if (!isOn) {
       await _bleService.turnOnBluetooth();
@@ -165,146 +183,6 @@ class _DeviceScreenState extends State<DeviceScreen> {
     return '${diff.inDays}d ago';
   }
 
-  /// Compact "last sync" status that expands into a short history of
-  /// connect/sync attempts — both interactive and background — so a
-  /// failure that happened while the app wasn't open is still visible
-  /// afterward instead of only ever reaching an invisible console log.
-  Widget _buildDiagnosticsCard() {
-    final latest = _recentSync.isNotEmpty ? _recentSync.first : null;
-
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => setState(() => _diagnosticsExpanded = !_diagnosticsExpanded),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Icon(
-                    latest == null
-                        ? Icons.history_rounded
-                        : (latest.success
-                            ? Icons.check_circle_outline
-                            : Icons.error_outline),
-                    color: latest == null
-                        ? AppColors.textSecondary
-                        : (latest.success ? AppColors.primaryGreen : AppColors.error),
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Sync diagnostics',
-                          style: TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          latest == null
-                              ? 'No sync attempts yet'
-                              : '${latest.success ? "OK" : "Failed"} • '
-                                  '${latest.source == SyncSource.background ? "Background" : "App"} • '
-                                  '${_relativeTime(latest.timestamp)}',
-                          style: const TextStyle(
-                            color: AppColors.textSecondary,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    _diagnosticsExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: AppColors.textSecondary,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_diagnosticsExpanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: _recentSync.isEmpty
-                  ? const Text(
-                      'Nothing logged yet — connect to your watch to start.',
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                    )
-                  : ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: _recentSync.length,
-                        separatorBuilder: (_, _) => const Divider(height: 12),
-                        itemBuilder: (context, index) {
-                          final e = _recentSync[index];
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                margin: const EdgeInsets.only(top: 4),
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: e.success ? AppColors.primaryGreen : AppColors.error,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${e.stage} · ${e.source == SyncSource.background ? "Background" : "App"} · '
-                                      '${_relativeTime(e.timestamp)}',
-                                      style: const TextStyle(
-                                        color: AppColors.textSecondary,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      e.message,
-                                      style: const TextStyle(
-                                        color: AppColors.textPrimary,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-            ),
-        ],
-      ),
-    );
-  }
-
   String _formatGapDuration(Duration d) {
     if (d.inMinutes < 60) return '${d.inMinutes}m';
     final hours = d.inMinutes ~/ 60;
@@ -312,147 +190,25 @@ class _DeviceScreenState extends State<DeviceScreen> {
     return mins == 0 ? '${hours}h' : '${hours}h ${mins}m';
   }
 
-  /// Live "is data actually arriving" view — the direct answer to "I'm not
-  /// sure if there's a gap right now like the ones in the exported files."
-  /// Pulls straight from the DB (DatabaseHelper.findGaps), so it reflects
-  /// what's actually landed locally, independent of whatever the
-  /// connection/notification state claims.
-  Widget _buildGapsCard() {
-    final ongoingGap = _lastReadingTime != null &&
-        DateTime.now().difference(_lastReadingTime!) >= _gapThreshold;
-
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => setState(() => _gapsExpanded = !_gapsExpanded),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Icon(
-                    ongoingGap ? Icons.warning_amber_rounded : Icons.timeline_rounded,
-                    color: ongoingGap ? AppColors.warning : AppColors.primaryGreen,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Last reading',
-                          style: TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          _lastReadingTime == null
-                              ? 'No readings yet'
-                              : '${_relativeTime(_lastReadingTime!)}'
-                                  '${_recentGaps.isNotEmpty ? " • ${_recentGaps.length} gap${_recentGaps.length == 1 ? "" : "s"} in last 6h" : ""}',
-                          style: TextStyle(
-                            color: ongoingGap ? AppColors.warning : AppColors.textSecondary,
-                            fontSize: 11,
-                            fontWeight: ongoingGap ? FontWeight.w600 : FontWeight.normal,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    _gapsExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: AppColors.textSecondary,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_gapsExpanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: _recentGaps.isEmpty
-                  ? Text(
-                      _lastReadingTime == null
-                          ? 'No readings recorded yet.'
-                          : 'No gaps of ${_gapThreshold.inMinutes}m+ in the last 6 hours.',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                    )
-                  : ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: _recentGaps.length,
-                        separatorBuilder: (_, _) => const Divider(height: 12),
-                        itemBuilder: (context, index) {
-                          final g = _recentGaps[index];
-                          final isOngoing = index == 0 && ongoingGap;
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                margin: const EdgeInsets.only(top: 4),
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: isOngoing ? AppColors.warning : AppColors.error,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      isOngoing
-                                          ? 'Ongoing — started ${_relativeTime(g.start)}'
-                                          : 'No data for ${_formatGapDuration(g.duration)}',
-                                      style: const TextStyle(
-                                        color: AppColors.textPrimary,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${_relativeTime(g.start)} → ${isOngoing ? "now" : _relativeTime(g.end)}',
-                                      style: const TextStyle(
-                                        color: AppColors.textSecondary,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-            ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _disconnect() async {
+    // A routine action (charging, adjusting the strap) — not destructive
+    // like logout — so this is a plain double-check against an accidental
+    // tap, not the heavier "are you sure" treatment. Disconnecting does
+    // pause the study's data collection though, so it's worth confirming
+    // rather than acting the instant the button is tapped.
+    final confirmed = await showAppConfirmSheet(
+      context: context,
+      icon: Icons.bluetooth_disabled_rounded,
+      iconColor: AppColors.warning,
+      title: 'Disconnect watch?',
+      body: "You'll stop collecting heart rate data until you reconnect — "
+          "try to put the watch back on again soon so we don't miss too "
+          'much of your session.',
+      primaryLabel: 'Disconnect',
+      secondaryLabel: 'Stay connected',
+    );
+    if (confirmed != true) return;
+
     await _bleService.disconnect();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -521,9 +277,24 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
 
-  // Real HRM confidence from the watch — not an arbitrary score derived
-  // from how much data happens to have accumulated.
-  Widget _buildSignalQualityCard() {
+  // Plain-language read on the live HRM confidence, not a raw reading
+  // count — a patient can act on "good contact" / "adjust the strap" in a
+  // way a number like "295600 readings collected" never gave them.
+  String _signalStatusText(bool hasSignal, Color scoreColor) {
+    if (!hasSignal) return 'No signal yet';
+    if (scoreColor == AppColors.primaryGreen) return 'Good contact';
+    if (scoreColor == AppColors.warning) return 'Signal a bit weak';
+    return 'Poor contact';
+  }
+
+  /// One combined "is the watch actually reading me well right now" card —
+  /// live signal quality plus when data last arrived, with a gap called out
+  /// only when one has actually happened recently. Replaces three separate
+  /// debug-flavored cards (signal quality with a raw reading count, an
+  /// expandable gap list, and raw sync logs) with the single answer a study
+  /// participant actually needs; the full technical detail still exists in
+  /// the debug panel for dev/QA use.
+  Widget _buildSignalAndDataCard() {
     final hasSignal = _latestConfidence > 0;
     final Color scoreColor = !hasSignal
         ? AppColors.textSecondary
@@ -533,77 +304,121 @@ class _DeviceScreenState extends State<DeviceScreen> {
                 ? AppColors.warning
                 : AppColors.error;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+    final ongoingGap = _lastReadingTime != null &&
+        DateTime.now().difference(_lastReadingTime!) >= _gapThreshold;
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: AppColors.cardBackground,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: scoreColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(Icons.sensors_rounded, color: scoreColor, size: 22),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Signal Quality',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  hasSignal ? 'From the watch\'s HRM sensor' : 'No data yet',
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: scoreColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.sensors_rounded, color: scoreColor, size: 19),
                   ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _signalStatusText(hasSignal, scoreColor),
+                          style: const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const Text(
+                          'Signal quality from the sensor',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (hasSignal)
+                    Text(
+                      '$_latestConfidence%',
+                      style: TextStyle(color: scoreColor, fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Divider(height: 0.5),
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.access_time_rounded, size: 15, color: AppColors.textSecondary),
+                  const SizedBox(width: 10),
+                  Text(
+                    _lastReadingTime == null
+                        ? 'No readings yet'
+                        : 'Last reading ${_relativeTime(_lastReadingTime!)}',
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (_recentGaps.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(
+              color: AppColors.cardBackground,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
                 ),
-                Text(
-                  '$_totalReadings readings collected',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+              ],
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.warning),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(_gapSummaryText(ongoingGap), style: const TextStyle(color: AppColors.textPrimary, fontSize: 12.5)),
                 ),
               ],
             ),
           ),
-          if (hasSignal)
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: scoreColor.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(
-                  '$_latestConfidence%',
-                  style: TextStyle(
-                    color: scoreColor,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
         ],
-      ),
+      ],
     );
+  }
+
+  String _gapSummaryText(bool ongoingGap) {
+    final gap = _recentGaps.first;
+    final extra = _recentGaps.length > 1 ? ' (+${_recentGaps.length - 1} more)' : '';
+    if (ongoingGap) {
+      return 'No new data for ${_formatGapDuration(DateTime.now().difference(gap.start))}$extra';
+    }
+    return 'One ${_formatGapDuration(gap.duration)} gap ${_relativeTime(gap.start)}$extra';
   }
 
   @override
@@ -753,16 +568,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Signal Quality Card
-          _buildSignalQualityCard(),
-          const SizedBox(height: 16),
-
-          // Reading timeline / gap detection — see DatabaseHelper.findGaps.
-          _buildGapsCard(),
-          const SizedBox(height: 16),
-
-          // Sync diagnostics — see sync_log_service.dart.
-          _buildDiagnosticsCard(),
+          // Live signal quality + last-reading/gap status.
+          _buildSignalAndDataCard(),
           const SizedBox(height: 16),
 
           if (!isConnected && sortedDevices.isNotEmpty) ...[

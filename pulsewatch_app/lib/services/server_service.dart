@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
@@ -46,10 +47,17 @@ class ServerService {
     return ms != null ? DateTime.fromMillisecondsSinceEpoch(ms) : null;
   }
 
-  Future<void> _saveLastUploadTime() async {
+  // Takes the timestamp of the last row actually included in the upload,
+  // not DateTime.now() — the export query runs before the network POST,
+  // so a reading inserted during that round-trip would already be past
+  // "now" by the time this saves, and never appear in an export again
+  // (the next delta starts *after* whatever's saved here). Anchoring to
+  // what was actually sent means the next delta always picks up exactly
+  // where this one left off, no gap and no re-send.
+  Future<void> _saveLastUploadTime(DateTime uploadedThrough) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(
-        await AuthService.instance.scopedKey('last_upload_time'), DateTime.now().millisecondsSinceEpoch);
+        await AuthService.instance.scopedKey('last_upload_time'), uploadedThrough.millisecondsSinceEpoch);
     // A successful upload clears whatever backlog was accumulating —
     // see checkUploadHealth below.
     await prefs.remove(await AuthService.instance.scopedKey('pending_since'));
@@ -72,8 +80,7 @@ class ServerService {
       if (hoursSinceLast < _autoUploadIntervalHours) return false;
     }
 
-    final stats = await getDataStats();
-    return stats.heartRateRecords > 0;
+    return await getPendingUploadCount() > 0;
   }
 
   // ─── Upload health ─────────────────────────────────────────────────────────
@@ -160,15 +167,52 @@ class ServerService {
 
   // ─── Export ───────────────────────────────────────────────────────────────
 
-  /// Exports the last 48 hours of data as an anonymized CSV.
-  /// Columns: timestamp, hr_bpm, rr_intervals_ms, accel_x, accel_y, accel_z
+  /// The boundary the next upload's delta starts after — the last
+  /// successful upload's data cutoff, or 48h ago for a first-ever upload.
+  /// Shared by exportAnonymizedCSV and getPendingUploadCount so the count
+  /// shown before uploading always matches what actually gets sent.
+  Future<int> _deltaCutoffMs() async {
+    final lastUpload = await getLastUploadTime();
+    return (lastUpload ?? DateTime.now().subtract(const Duration(hours: 48)))
+        .millisecondsSinceEpoch;
+  }
+
+  /// Cheap count of readings recorded since the last successful upload —
+  /// for showing "N not yet uploaded" in the UI without paying for a full
+  /// CSV export just to display a number.
+  Future<int> getPendingUploadCount() async {
+    final db = await _db.database;
+    final cutoff = await _deltaCutoffMs();
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM heart_rate WHERE timestamp > ?',
+      [cutoff],
+    );
+    return (result.first['count'] as int?) ?? 0;
+  }
+
+  /// Exports everything since the last successful upload (or the last 48
+  /// hours, for a first-ever upload) as an anonymized CSV. Columns:
+  /// timestamp, hr_bpm, rr_intervals_ms, accel_x, accel_y, accel_z
+  ///
+  /// This must stay a delta, not a fixed "last 48 hours" snapshot — the
+  /// backend's /upload endpoint just writes each upload as its own new
+  /// file with no dedup against previous uploads (see pulsewatch_backend/
+  /// app.py), so re-sending the same window on every auto-upload cycle
+  /// would leave the server with heavily overlapping, duplicated data by
+  /// the end of a session instead of one clean record of it.
   Future<ExportResult> exportAnonymizedCSV() async {
     final db = await _db.database;
 
-    final cutoff = DateTime.now()
-        .subtract(const Duration(hours: 48))
-        .millisecondsSinceEpoch;
+    final cutoff = await _deltaCutoffMs();
 
+    // The join condition must stay sargable — abs(hr.timestamp - a.timestamp)
+    // < 500 can't use idx_accel_timestamp, so SQLite falls back to a nested
+    // scan of the whole accelerometer table per heart_rate row. At a real
+    // 48h session's row counts that's on the order of N*M comparisons and
+    // can run for minutes while holding the connection's lock, starving
+    // every other read/write on the app (this is what caused Insights/Device
+    // to look "frozen" — not a deadlock, a query stuck for a very long time).
+    // Rewriting as a BETWEEN range lets it use the existing timestamp index.
     final rows = await db.rawQuery('''
       SELECT
         hr.timestamp,
@@ -179,8 +223,8 @@ class ServerService {
         a.z           AS accel_z
       FROM heart_rate hr
       LEFT JOIN accelerometer a
-        ON abs(hr.timestamp - a.timestamp) < 500
-      WHERE hr.timestamp >= ?
+        ON a.timestamp BETWEEN hr.timestamp - 500 AND hr.timestamp + 500
+      WHERE hr.timestamp > ?
       ORDER BY hr.timestamp ASC
     ''', [cutoff]);
 
@@ -202,13 +246,21 @@ class ServerService {
     }
 
     return ExportResult(
-        csv: buf.toString(), recordCount: rows.length, isEmpty: false);
+      csv: buf.toString(),
+      recordCount: rows.length,
+      isEmpty: false,
+      // rows are ORDER BY hr.timestamp ASC, so the last row carries the
+      // max heart_rate timestamp actually included in this export.
+      latestTimestamp: DateTime.fromMillisecondsSinceEpoch(rows.last['timestamp'] as int),
+    );
   }
 
   // ─── Upload ───────────────────────────────────────────────────────────────
 
-  /// Exports and uploads the last 48 hours of anonymized data.
-  /// Saves [lastUploadTime] on success so auto-upload can track the interval.
+  /// Exports and uploads everything recorded since the last successful
+  /// upload. Saves [lastUploadTime] (from the export's own latest included
+  /// row, not the wall clock) on success so the next call picks up exactly
+  /// where this one left off.
   Future<UploadResult> uploadData() async {
     try {
       final serverUrl = await getServerUrl();
@@ -224,7 +276,7 @@ class ServerService {
       if (export.isEmpty) {
         return UploadResult(
           success: false,
-          message: 'No data recorded in the last 48 hours.',
+          message: 'No new data to upload.',
           recordsUploaded: 0,
         );
       }
@@ -258,10 +310,10 @@ class ServerService {
       }
 
       if (response.statusCode == 200) {
-        await _saveLastUploadTime();
+        await _saveLastUploadTime(export.latestTimestamp!);
         return UploadResult(
           success: true,
-          message: 'Uploaded ${export.recordCount} records successfully.',
+          message: 'Uploaded ${export.recordCount} record${export.recordCount == 1 ? '' : 's'} successfully.',
           recordsUploaded: export.recordCount,
         );
       } else if (response.statusCode == 401) {
@@ -280,6 +332,21 @@ class ServerService {
           recordsUploaded: 0,
         );
       }
+    } on SocketException {
+      // Thrown when the OS can't even open a connection — no network path
+      // to anywhere, as opposed to a network that's up but a server that
+      // isn't answering (TimeoutException below).
+      return UploadResult(
+        success: false,
+        message: "No internet connection. Check your phone's connection and try again.",
+        recordsUploaded: 0,
+      );
+    } on TimeoutException {
+      return UploadResult(
+        success: false,
+        message: "Couldn't reach the server — it may be down. Try again shortly.",
+        recordsUploaded: 0,
+      );
     } catch (e) {
       return UploadResult(
         success: false,
@@ -306,41 +373,6 @@ class ServerService {
     }
   }
 
-  // ─── Stats ────────────────────────────────────────────────────────────────
-
-  Future<DataStats> getDataStats() async {
-    final db = await _db.database;
-
-    final cutoff = DateTime.now()
-        .subtract(const Duration(hours: 48))
-        .millisecondsSinceEpoch;
-
-    final hrResult = await db.rawQuery(
-      'SELECT COUNT(*) as count, MIN(timestamp) as min_ts, MAX(timestamp) as max_ts '
-      'FROM heart_rate WHERE timestamp >= ?',
-      [cutoff],
-    );
-    final accelResult = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM accelerometer WHERE timestamp >= ?',
-      [cutoff],
-    );
-
-    final hrCount = (hrResult.first['count'] as int?) ?? 0;
-    final accelCount = (accelResult.first['count'] as int?) ?? 0;
-    final minTs = hrResult.first['min_ts'] as int?;
-    final maxTs = hrResult.first['max_ts'] as int?;
-
-    return DataStats(
-      heartRateRecords: hrCount,
-      accelerometerRecords: accelCount,
-      firstReading: minTs != null
-          ? DateTime.fromMillisecondsSinceEpoch(minTs)
-          : null,
-      lastReading: maxTs != null
-          ? DateTime.fromMillisecondsSinceEpoch(maxTs)
-          : null,
-    );
-  }
 }
 
 // ─── Models ───────────────────────────────────────────────────────────────────
@@ -357,11 +389,16 @@ class ExportResult {
   final String csv;
   final int recordCount;
   final bool isEmpty;
+  // Timestamp of the last row actually included — null when isEmpty.
+  // See _saveLastUploadTime's doc comment for why this, not DateTime.now(),
+  // anchors the next delta.
+  final DateTime? latestTimestamp;
 
   ExportResult(
       {required this.csv,
       required this.recordCount,
-      required this.isEmpty});
+      required this.isEmpty,
+      this.latestTimestamp});
 }
 
 class UploadResult {
@@ -380,16 +417,3 @@ class UploadResult {
   });
 }
 
-class DataStats {
-  final int heartRateRecords;
-  final int accelerometerRecords;
-  final DateTime? firstReading;
-  final DateTime? lastReading;
-
-  DataStats({
-    required this.heartRateRecords,
-    required this.accelerometerRecords,
-    this.firstReading,
-    this.lastReading,
-  });
-}

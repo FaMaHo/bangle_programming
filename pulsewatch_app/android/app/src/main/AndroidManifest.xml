@@ -11,9 +11,13 @@
                      android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     
-    <!-- Required for BLE scanning on Android < 12 -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Required for BLE scanning on Android < 12 only — BLUETOOTH_SCAN above
+         is already flagged neverForLocation, so capping these here stops
+         Android 12+ from asking for Location at all. Without the cap, a
+         cardiac monitoring app asking for Location permission it doesn't
+         actually need reads as alarming for no reason. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
     
     <!-- Declare BLE feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />

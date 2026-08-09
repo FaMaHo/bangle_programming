@@ -764,8 +764,9 @@ class BleService {
 
   /// True if the user hasn't already been offered the battery-optimization
   /// exemption prompt, and the app isn't already exempted. Checked from the
-  /// UI (home_screen.dart) after a successful connect, since showing the
-  /// explanatory dialog needs a BuildContext this service doesn't have.
+  /// UI (MainNavigation in main.dart) after a successful connect, since
+  /// showing the explanatory dialog needs a BuildContext this service
+  /// doesn't have.
   Future<bool> needsBatteryExemptionPrompt() async {
     if (!Platform.isAndroid) return false;
 
@@ -786,6 +787,40 @@ class BleService {
   /// Opens the OS "ignore battery optimizations" request for this app.
   Future<void> requestBatteryExemption() =>
       FlutterForegroundTask.requestIgnoreBatteryOptimization();
+
+  /// True if the exemption was granted (or asked about) before but isn't in
+  /// effect now — aggressive OEM battery managers (Xiaomi, Huawei, Samsung)
+  /// are known to silently re-enable battery restrictions after the fact,
+  /// quietly reintroducing the exact background-kill risk the original
+  /// prompt exists to prevent. Distinct from needsBatteryExemptionPrompt,
+  /// which only cares about the *first* ask — this cares about the current
+  /// state regardless of history, so it can catch a later revocation too.
+  Future<bool> isBatteryExemptionRevoked() async {
+    if (!Platform.isAndroid) return false;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(_kBatteryExemptionAsked) ?? false)) return false;
+
+    final ignoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    return !ignoring;
+  }
+
+  // Scanning triggers the OS Bluetooth (and, on Android <12, Location)
+  // permission dialogs — this just tracks whether the one-time in-app
+  // explanation has already been shown, so device_screen.dart can show it
+  // before the bare system dialog the first time, without nagging on every
+  // subsequent scan.
+  static const _kBleScanRationaleShown = 'ble_scan_rationale_shown';
+
+  Future<bool> needsBleScanRationale() async {
+    final prefs = await SharedPreferences.getInstance();
+    return !(prefs.getBool(_kBleScanRationaleShown) ?? false);
+  }
+
+  Future<void> markBleScanRationaleShown() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kBleScanRationaleShown, true);
+  }
 
   // Setup for Bangle.js (Nordic UART)
   Future<bool> _setupBangleJS(List<BluetoothService> services) async {
@@ -1538,6 +1573,14 @@ class BleService {
         _tWatchHRCharacteristic = null;
         _currentDeviceType = DeviceType.unknown;
       }
+
+      // Screens (Device screen's connection card, etc.) only rebuild by
+      // listening to this stream — without emitting here, they'd stay
+      // showing "Connected" until something unrelated forced a rebuild
+      // (e.g. navigating away and back), since the plugin's own per-device
+      // connectionState stream isn't guaranteed to fire promptly for a
+      // disconnect we requested ourselves.
+      _connectionStateController.add(BluetoothConnectionState.disconnected);
 
       await ConnectionStatusService.instance.setState(WatchConnectionState.disconnected);
 

@@ -10,8 +10,6 @@ import '../services/report_service.dart';
 import '../services/server_service.dart';
 import '../services/upload_consent_service.dart';
 import 'report_screen.dart';
-import 'settings_screen.dart';
-import '../widgets/app_bottom_sheet.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 /// Home dashboard — the first thing a user sees. Answers, at a glance:
@@ -89,14 +87,15 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadUploadHealth();
     _uploadHealthTimer = Timer.periodic(const Duration(minutes: 5), (_) => _loadUploadHealth());
 
+    // The battery-exemption prompt used to be triggered from here too, but
+    // this screen is unmounted whenever another tab is active — it now
+    // lives in MainNavigation (main.dart), which never unmounts, so it
+    // can't miss a connection that completes while some other tab is open.
     _connectionSubscription = _bleService.connectionStateStream.listen((state) {
       if (mounted) {
         setState(() {
           _isConnected = (state == BluetoothConnectionState.connected);
         });
-      }
-      if (state == BluetoothConnectionState.connected) {
-        _maybeShowBatteryExemptionPrompt();
       }
     });
   }
@@ -116,32 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final consented = await UploadConsentService.instance.hasConsented();
     final health = consented ? await _server.checkUploadHealth() : UploadHealth.ok;
     if (mounted) setState(() => _uploadHealth = health);
-  }
-
-  /// Offered once, the first time we see a successful connection where the
-  /// app isn't already exempted — battery optimization is what silently
-  /// throttled/killed the background connection during earlier testing.
-  Future<void> _maybeShowBatteryExemptionPrompt() async {
-    if (!await _bleService.needsBatteryExemptionPrompt()) return;
-    if (!mounted) return;
-
-    final proceed = await showAppConfirmSheet(
-      context: context,
-      icon: Icons.battery_charging_full_rounded,
-      iconColor: AppColors.primaryGreen,
-      title: 'Keep recording reliable',
-      body: 'Your phone\'s battery settings can pause PulseWatch in the '
-          'background, which can interrupt your 48-hour session. On the '
-          'next screen, choose "Allow" (or "Unrestricted") so recording '
-          'keeps running the whole time.',
-      primaryLabel: 'Continue',
-      secondaryLabel: 'Not now',
-    );
-
-    if (proceed == true) {
-      await _bleService.requestBatteryExemption();
-    }
-    await _bleService.markBatteryExemptionAsked();
   }
 
   /// Kicks off the one-time full-session report once 48h of data has been
@@ -315,9 +288,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SizedBox(width: 12),
         GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const SettingsScreen()),
-          ),
+          onTap: () => widget.onNavigateToTab(3),
           child: Container(
             width: 36,
             height: 36,
