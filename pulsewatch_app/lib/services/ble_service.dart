@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -1201,10 +1203,22 @@ class BleService {
   // device_id) index) is silently ignored at the DB layer rather than
   // duplicated, but the file has still been fully consumed either way, so
   // it's still correct to erase it.
+  // Batches rows into one transaction per chunk instead of awaiting two
+  // individual inserts per row — see DatabaseHelper.insertSyncedRows for
+  // why that used to be a real problem (a stuck-locked database) over a
+  // long session, not just a performance nit. Chunked at 2000 rows so an
+  // unusually large file (e.g. after a long disconnect the watch buffered
+  // for hours) still bounds a single transaction's size/duration rather
+  // than committing everything from one file in one shot.
+  static const _syncChunkSize = 2000;
+
   Future<int> _processFileData(String csvData) async {
     List<String> lines = csvData.split('\n');
     String? deviceId = _connectedDevice?.remoteId.toString();
     int rowsInserted = 0;
+
+    var hrChunk = <Map<String, dynamic>>[];
+    var accelChunk = <Map<String, dynamic>>[];
 
     for (String line in lines) {
       line = line.trim();
@@ -1221,16 +1235,38 @@ class BleService {
           int accelX = int.parse(parts[4]);
           int accelY = int.parse(parts[5]);
           int accelZ = int.parse(parts[6]);
-          
-          await _db.insertHeartRateWithTimestamp(timestamp, bpm, rrIntervalMs, confidence, deviceId);
-          await _db.insertAccelerometerWithTimestamp(timestamp, accelX, accelY, accelZ, deviceId);
+
+          hrChunk.add({
+            'timestamp': timestamp,
+            'bpm': bpm,
+            'rr_interval_ms': rrIntervalMs,
+            'confidence': confidence,
+            'device_id': deviceId,
+          });
+          accelChunk.add({
+            'timestamp': timestamp,
+            'x': accelX,
+            'y': accelY,
+            'z': accelZ,
+            'device_id': deviceId,
+          });
 
           _totalRecords++;
           rowsInserted++;
+
+          if (hrChunk.length >= _syncChunkSize) {
+            await _db.insertSyncedRows(heartRateRows: hrChunk, accelRows: accelChunk);
+            hrChunk = [];
+            accelChunk = [];
+          }
         }
       } catch (e) {
         print("Error parsing line: $line - $e");
       }
+    }
+
+    if (hrChunk.isNotEmpty) {
+      await _db.insertSyncedRows(heartRateRows: hrChunk, accelRows: accelChunk);
     }
 
     print("✅ Processed $rowsInserted rows from this file (total $_totalRecords)");
@@ -1525,18 +1561,130 @@ class BleService {
     }
   }
 
-  Future<void> sendRiskAlarm() async {
-    await _sendCommandBangle(
-      'Bangle.buzz(300,0.4);'
-      'E.showMessage(\"Risk alert\",\"PulseWatch\");'
-      'setTimeout(function(){Bangle.setUI();},4000);'
-    );
-  }
-
   void dispose() {
     _devicesController.close();
     _connectionStateController.close();
     _transferProgressController.close();
+  }
+
+  // ── DEBUG SIMULATION (preview builds only) ────────────────────────────────
+  // Drives every connection/sync state this app can produce without a real
+  // watch in range — used to preview screens on the Android emulator, which
+  // has no Bluetooth radio a real watch could pair with (see
+  // lib/debug/debug_panel.dart). Routes through the exact same streams
+  // (connectionStateStream, transferProgressStream) and services
+  // (ConnectionStatusService, SyncLogService, the foreground notification)
+  // a real connect uses, so screens can't tell the difference. Every method
+  // below is a no-op in release builds — kDebugMode is const-folded to false
+  // there, so this whole section is dead-code-eliminated and can never run
+  // on a shipped build.
+
+  Future<void> debugSimulateConnect({
+    required DeviceType deviceType,
+    String? label,
+  }) async {
+    if (!kDebugMode) return;
+
+    _currentDeviceType = deviceType;
+    _connectedDevice = BluetoothDevice.fromId('DE:BU:G0:00:00:01');
+    final deviceLabel = label ?? _deviceLabelFor(deviceType);
+
+    _connectionStateController.add(BluetoothConnectionState.connected);
+    await ConnectionStatusService.instance.setState(
+      WatchConnectionState.connected,
+      deviceLabel: deviceLabel,
+    );
+
+    try {
+      await _ensureForegroundServiceRunning();
+      await ConnectionStatusService.instance.updateNotification();
+    } catch (_) {
+      // Best-effort, same as the real connect path.
+    }
+
+    await _log(
+      source: SyncSource.interactive,
+      success: true,
+      stage: SyncStage.connect,
+      message: '[Simulated] Connected to $deviceLabel.',
+    );
+  }
+
+  Future<void> debugSimulateDisconnect() async {
+    if (!kDebugMode) return;
+
+    _connectedDevice = null;
+    _currentDeviceType = DeviceType.unknown;
+    _connectionStateController.add(BluetoothConnectionState.disconnected);
+    await ConnectionStatusService.instance.setState(WatchConnectionState.disconnected);
+    await _stopForegroundServiceIfRunning();
+  }
+
+  Future<void> debugSimulateReconnecting({String label = 'watch'}) async {
+    if (!kDebugMode) return;
+    await ConnectionStatusService.instance.setState(
+      WatchConnectionState.reconnecting,
+      deviceLabel: label,
+    );
+    await _log(
+      source: _activeConnectionSource,
+      success: false,
+      stage: SyncStage.connect,
+      message: '[Simulated] Watch connection dropped unexpectedly — reconnecting automatically.',
+    );
+  }
+
+  Future<void> debugSimulateSyncFailure(String message) async {
+    if (!kDebugMode) return;
+    await _log(
+      source: SyncSource.interactive,
+      success: false,
+      stage: SyncStage.sync,
+      message: '[Simulated] $message',
+    );
+  }
+
+  /// Plays out a realistic multi-file transfer over a few seconds so the
+  /// syncing UI (progress bar, per-file status text) can actually be watched
+  /// instead of only ever seen as a single instantaneous jump.
+  Future<void> debugRunSyncProgressDemo({int totalFiles = 3}) async {
+    if (!kDebugMode) return;
+
+    _transferProgressController.add(TransferProgress(
+      currentFile: 0,
+      totalFiles: 0,
+      recordsReceived: 0,
+      status: 'Requesting file list from Bangle.js...',
+    ));
+    await Future.delayed(const Duration(milliseconds: 600));
+
+    int received = 0;
+    final rand = Random();
+    for (var i = 1; i <= totalFiles; i++) {
+      _transferProgressController.add(TransferProgress(
+        currentFile: i,
+        totalFiles: totalFiles,
+        recordsReceived: received,
+        status: 'Reading file $i/$totalFiles...',
+      ));
+      await Future.delayed(const Duration(milliseconds: 900));
+      received += 300 + rand.nextInt(200);
+    }
+
+    _transferProgressController.add(TransferProgress(
+      currentFile: totalFiles,
+      totalFiles: totalFiles,
+      recordsReceived: received,
+      status: '✅ Bangle.js sync complete! $received records saved.',
+    ));
+
+    await _log(
+      source: SyncSource.interactive,
+      success: true,
+      stage: SyncStage.sync,
+      message: '[Simulated] Sync complete.',
+      recordsSynced: received,
+    );
   }
 }
 

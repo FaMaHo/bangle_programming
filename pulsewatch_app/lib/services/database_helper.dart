@@ -1,28 +1,77 @@
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
+  static String? _activeUserId;
 
   DatabaseHelper._init();
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('pulsewatch.db');
+    _database = await _initDB(_dbFileName());
     return _database!;
+  }
+
+  String _dbFileName() {
+    final id = _activeUserId;
+    if (id == null || id.isEmpty) return 'pulsewatch.db';
+    final safeId = id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return 'pulsewatch_$safeId.db';
+  }
+
+  /// Points every call below at [patientId]'s own local database file
+  /// instead of one file shared by every account that's ever logged into
+  /// this device — otherwise a second test account (or a second real
+  /// participant sharing a phone) silently sees the previous account's
+  /// heart-rate and accelerometer rows, which is exactly the bug a second
+  /// signup surfaced. Call this once the active user is known: right after
+  /// login/enrollment succeeds, and again on cold start once AuthService
+  /// confirms an existing session (see AuthService.switchActiveUser).
+  ///
+  /// Idempotent for the same id. Switching to a different id (or to null,
+  /// on logout) closes whatever database is currently open so the next
+  /// access opens the right file fresh — nothing is deleted either way,
+  /// each account's data just lives in its own file.
+  Future<void> switchUser(String? patientId) async {
+    if (_activeUserId == patientId) return;
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+    _activeUserId = patientId;
   }
 
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(
+    final db = await openDatabase(
       path,
       version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
+
+    // The foreground app and the periodic background sync task
+    // (background_sync_service.dart) run in separate isolates, each with
+    // their own connection to this same file, and can genuinely write
+    // around the same moment during a long session. WAL lets one side
+    // read/write without blocking as aggressively as SQLite's default
+    // rollback-journal mode, and recovers cleanly from an abrupt process
+    // kill instead of needing hot-journal rollback on next open.
+    await db.execute('PRAGMA journal_mode=WAL');
+    // Per-connection, so this has to be set on every open (unlike
+    // journal_mode, which is stored in the file itself): if the other
+    // isolate's connection IS mid-write, wait and retry at the SQLite
+    // level for up to 15s instead of failing/surfacing "database is
+    // locked" immediately.
+    await db.execute('PRAGMA busy_timeout=15000');
+
+    return db;
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -183,6 +232,31 @@ class DatabaseHelper {
       },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
+  }
+
+  /// Inserts a whole synced-file's worth of rows as one transaction —
+  /// used by BleService._processFileData instead of calling
+  /// insertHeartRateWithTimestamp/insertAccelerometerWithTimestamp per
+  /// row. sqflite implicitly wraps every individual insert() in its own
+  /// commit+fsync, so a file with hundreds or thousands of buffered rows
+  /// used to mean that many separate write-lock acquisitions in a row —
+  /// long enough, often enough, to collide with the periodic background
+  /// sync task (a separate isolate, its own connection to this same
+  /// file) and leave the database stuck "locked" during a real multi-hour
+  /// session. One transaction per file removes almost all of that window.
+  Future<void> insertSyncedRows({
+    required List<Map<String, dynamic>> heartRateRows,
+    required List<Map<String, dynamic>> accelRows,
+  }) async {
+    final db = await database;
+    final batch = db.batch();
+    for (final row in heartRateRows) {
+      batch.insert('heart_rate', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    for (final row in accelRows) {
+      batch.insert('accelerometer', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    await batch.commit(noResult: true);
   }
 
   // Get heart rate for today
@@ -382,6 +456,78 @@ class DatabaseHelper {
     return result.map((r) => (r['mean_bpm'] as num).toDouble()).toList();
   }
 
+  /// Per-hour mean BPM and mean signal confidence for the last [hours]
+  /// hours — the Insights screen's trend chart and wear-time timeline are
+  /// both built from this, at the same hourly resolution, so a gap or
+  /// weak-signal block in the timeline lines up exactly with the matching
+  /// break/dip in the HR line above it. A missing hour bucket (absent from
+  /// the returned list) means literally nothing was recorded that hour.
+  Future<List<HourlySample>> getHourlySamples(int hours) async {
+    final db = await database;
+    final cutoff = DateTime.now()
+        .subtract(Duration(hours: hours))
+        .millisecondsSinceEpoch;
+    final result = await db.rawQuery(
+      'SELECT (timestamp / 3600000) AS hour_bucket, AVG(bpm) AS mean_bpm, '
+      'AVG(confidence) AS mean_confidence, COUNT(*) AS n '
+      'FROM heart_rate WHERE timestamp >= ? '
+      'GROUP BY hour_bucket ORDER BY hour_bucket ASC',
+      [cutoff],
+    );
+    return result
+        .map((r) => HourlySample(
+              hourBucket: r['hour_bucket'] as int,
+              meanBpm: (r['mean_bpm'] as num).toDouble(),
+              meanConfidence: (r['mean_confidence'] as num?)?.toDouble(),
+              count: r['n'] as int,
+            ))
+        .toList();
+  }
+
+  // Distinct hour buckets with at least one HR reading since [since] — same
+  // "coverage" logic as getHourlyMeanHR but anchored to a fixed point in
+  // time (e.g. midnight) instead of a rolling N-hour lookback, for showing
+  // today's wear coverage on the Home dashboard.
+  Future<int> getHoursWithDataSince(DateTime since) async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(DISTINCT (timestamp / 3600000)) as cnt '
+      'FROM heart_rate WHERE timestamp >= ?',
+      [since.millisecondsSinceEpoch],
+    );
+    return (result.first['cnt'] as int?) ?? 0;
+  }
+
+  // Average deviation from 1g (resting) across accelerometer samples in
+  // [start, end) — a simple movement-intensity proxy. Returns null when
+  // there's no accelerometer data in the window, so callers can distinguish
+  // "no movement" from "nothing recorded yet". Fetches raw rows and sums in
+  // Dart rather than in SQL since sqflite's bundled SQLite build isn't
+  // guaranteed to have the math functions extension (SQRT) enabled.
+  Future<double?> getAverageMovementIntensity({
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'accelerometer',
+      columns: ['x', 'y', 'z'],
+      where: 'timestamp >= ? AND timestamp < ?',
+      whereArgs: [start.millisecondsSinceEpoch, end.millisecondsSinceEpoch],
+    );
+    if (rows.isEmpty) return null;
+
+    double sum = 0;
+    for (final row in rows) {
+      final x = (row['x'] as num).toDouble();
+      final y = (row['y'] as num).toDouble();
+      final z = (row['z'] as num).toDouble();
+      final magnitudeG = math.sqrt(x * x + y * y + z * z) / 1000.0;
+      sum += (magnitudeG - 1.0).abs();
+    }
+    return sum / rows.length;
+  }
+
   Future<DateTime?> getLastReadingTime() async {
     final db = await database;
     final result = await db.rawQuery('SELECT MAX(timestamp) as last FROM heart_rate');
@@ -472,6 +618,37 @@ class DatabaseHelper {
     final db = await database;
     await db.close();
   }
+
+  // ── DEBUG (preview builds only) ──────────────────────────────────────────
+  // Bulk insert/clear used by lib/debug/debug_data_seeder.dart to populate a
+  // realistic-looking session on the Android emulator, which has no real
+  // watch to sync from. kDebugMode is const-folded to false in release
+  // builds, so these are dead-code-eliminated and can never run on a
+  // shipped build.
+
+  Future<void> debugBulkInsert({
+    required List<Map<String, dynamic>> heartRateRows,
+    required List<Map<String, dynamic>> accelRows,
+  }) async {
+    if (!kDebugMode) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final row in heartRateRows) {
+      batch.insert('heart_rate', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    for (final row in accelRows) {
+      batch.insert('accelerometer', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> debugClearAll() async {
+    if (!kDebugMode) return;
+    final db = await database;
+    await db.delete('heart_rate');
+    await db.delete('accelerometer');
+    await db.delete('sessions');
+  }
 }
 
 /// A stretch with no heart-rate reading for at least the caller's requested
@@ -482,4 +659,21 @@ class ReadingGap {
   Duration get duration => end.difference(start);
 
   ReadingGap({required this.start, required this.end});
+}
+
+/// One hour's worth of HR data — see [DatabaseHelper.getHourlySamples].
+/// [hourBucket] is `timestamp ~/ 3600000`, i.e. hours since the Unix
+/// epoch, not an hour-of-day.
+class HourlySample {
+  final int hourBucket;
+  final double meanBpm;
+  final double? meanConfidence;
+  final int count;
+
+  HourlySample({
+    required this.hourBucket,
+    required this.meanBpm,
+    required this.meanConfidence,
+    required this.count,
+  });
 }

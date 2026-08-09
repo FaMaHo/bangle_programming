@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'ble_service.dart';
+import 'auth_service.dart';
 import 'database_helper.dart';
 import 'hrv_feature_extractor.dart';
 import 'inference_service.dart';
@@ -154,9 +155,13 @@ class ReportService {
 
   static Future<Map<String, double>> loadImportances() => _loadImportances();
 
+  /// Scoped per-user (see AuthService.scopedKey) — this is a cardiac risk
+  /// report, about as sensitive as this app's data gets, so it must never
+  /// be readable by whichever account happens to log in next on this
+  /// device.
   static Future<FinalReport?> loadCachedReport() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKey);
+    final raw = prefs.getString(await AuthService.instance.scopedKey(_prefsKey));
     if (raw == null) return null;
     try {
       return FinalReport.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -167,7 +172,17 @@ class ReportService {
 
   static Future<void> _saveReport(FinalReport report) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefsKey, jsonEncode(report.toJson()));
+    await prefs.setString(await AuthService.instance.scopedKey(_prefsKey), jsonEncode(report.toJson()));
+  }
+
+  /// Debug-only: clears the cached report so re-seeding a fresh 48h session
+  /// (see lib/debug/debug_data_seeder.dart) recomputes from scratch instead
+  /// of showing a stale report from a previous seed. No-op in release
+  /// builds — see kDebugMode.
+  static Future<void> debugClearCachedReport() async {
+    if (!kDebugMode) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(await AuthService.instance.scopedKey(_prefsKey));
   }
 
   /// Computes the final report from every sample in the last 48h of the
@@ -274,8 +289,19 @@ class ReportService {
 
     await _saveReport(report);
 
-    await NotificationService.sendRiskAlert(sessionScore);
-    if (sessionScore > 0.93) await BleService().sendRiskAlarm();
+    // The report is already safely cached above — a notification failure
+    // (platform quirk, permission denial, plugin not ready) must never
+    // take the whole computation down with it. This only runs once per
+    // session; losing the freshly-scored report to an unrelated
+    // notification hiccup would be a much worse outcome than just missing
+    // the notification.
+    try {
+      // Always fires — sendRiskAlert below only does for higher scores, so
+      // without this a low/medium-risk session (the common case) would
+      // finish with no notification at all telling the user to go look.
+      await NotificationService.sendReportReadyAlert();
+      await NotificationService.sendRiskAlert(sessionScore);
+    } catch (_) {}
 
     return report;
   }

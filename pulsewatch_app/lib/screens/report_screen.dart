@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
 import '../theme/app_theme.dart';
+import '../services/pdf_report_service.dart';
 import '../services/report_service.dart';
 
 /// Full cardiac risk report, generated once from a full 48h session —
@@ -15,6 +17,7 @@ class ReportScreen extends StatefulWidget {
 
 class _ReportScreenState extends State<ReportScreen> {
   List<FeatureRow>? _topFeatures;
+  bool _isSharing = false;
 
   @override
   void initState() {
@@ -26,6 +29,30 @@ class _ReportScreenState extends State<ReportScreen> {
     final importances = await ReportService.loadImportances();
     if (mounted) {
       setState(() => _topFeatures = widget.report.topFeatures(importances));
+    }
+  }
+
+  /// Builds a proper paginated PDF (see PdfReportService — a real document,
+  /// not a screenshot) and hands it to the OS share sheet, so "Print" and
+  /// "Save as PDF" actually work instead of cropping one tall image to a
+  /// single page.
+  Future<void> _shareReport() async {
+    if (_isSharing || _topFeatures == null) return;
+    setState(() => _isSharing = true);
+    try {
+      final bytes = await PdfReportService.build(widget.report, _topFeatures!);
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'heart_sclerosis_report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not share the report: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSharing = false);
     }
   }
 
@@ -60,15 +87,35 @@ class _ReportScreenState extends State<ReportScreen> {
         backgroundColor: AppColors.background,
         elevation: 0,
         title: const Text(
-          'Cardiac Risk Report',
+          'Heart Sclerosis Risk Report',
           style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Share report',
+            icon: _isSharing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.textSecondary),
+                  )
+                : const Icon(Icons.ios_share_rounded, color: AppColors.textPrimary),
+            onPressed: _isSharing ? null : _shareReport,
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 16),
+              child: Text(
+                'AI Bracelet System  ·  NUST Politehnica Bucharest',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ),
             _buildDisclaimer(),
             const SizedBox(height: 16),
             _buildScoreSection(color, pct, report),
@@ -122,7 +169,7 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Cardiac Risk Score',
+            'CARDIAC RISK SCORE',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.5),
           ),
           const SizedBox(height: 14),
@@ -135,13 +182,23 @@ class _ReportScreenState extends State<ReportScreen> {
             ),
           ),
           const SizedBox(height: 20),
+          // Matches fromDaria's gauge-fill gradient (green fading into the
+          // risk color) instead of a flat fill.
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: (report.score).clamp(0.0, 1.0),
-              minHeight: 12,
-              backgroundColor: AppColors.background,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
+            child: Stack(
+              children: [
+                Container(height: 12, color: AppColors.background),
+                FractionallySizedBox(
+                  widthFactor: report.score.clamp(0.0, 1.0),
+                  child: Container(
+                    height: 12,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [AppColors.primaryGreen, color]),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 6),
@@ -149,6 +206,7 @@ class _ReportScreenState extends State<ReportScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: const [
               Text('0% — Healthy', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+              Text('50%', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
               Text('100% — High Risk', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
             ],
           ),
@@ -172,39 +230,60 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   Widget _buildOverviewSection(FinalReport report) {
+    // Mirrors fromDaria's meta-grid fields exactly, except "File" — there's
+    // no single source filename in the live app (a session is assembled
+    // from many synced pw*.csv chunks, not one file) — "Generated" fills
+    // that slot with the one piece of equivalent, meaningful information.
     final items = [
       ['Windows analysed', '${report.nWindows}'],
-      ['Data points', '${report.nRows}'],
+      ['Data rows', '${report.nRows}'],
       ['Session duration', '~${report.durationHours.toStringAsFixed(1)} hours'],
       ['Mean HR', '${report.meanHr.toStringAsFixed(0)} bpm'],
       ['Mean RMSSD', '${report.meanRmssd.toStringAsFixed(1)} ms'],
       ['Generated', _formatDate(report.computedAt)],
     ];
 
+    // A fixed-aspect-ratio GridView forces every cell to the same height
+    // regardless of content — the "Generated" cell's two-line date/time
+    // value overflowed it. Building rows of two content-sized cells instead
+    // lets each cell grow to fit whatever it actually needs to show.
+    final rows = <Widget>[];
+    for (var i = 0; i < items.length; i += 2) {
+      final second = i + 1 < items.length ? items[i + 1] : null;
+      rows.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: i + 2 < items.length ? 12 : 0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _buildOverviewCell(items[i])),
+              const SizedBox(width: 12),
+              Expanded(child: second != null ? _buildOverviewCell(second) : const SizedBox()),
+            ],
+          ),
+        ),
+      );
+    }
+
     return _buildSectionCard(
       title: 'Session Overview',
-      child: GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        childAspectRatio: 2.6,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        children: items.map((item) {
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(item[0], style: const TextStyle(color: AppColors.textSecondary, fontSize: 10.5, letterSpacing: 0.3)),
-                const SizedBox(height: 2),
-                Text(item[1], style: const TextStyle(color: AppColors.textPrimary, fontSize: 14.5, fontWeight: FontWeight.w700)),
-              ],
-            ),
-          );
-        }).toList(),
+      child: Column(children: rows),
+    );
+  }
+
+  Widget _buildOverviewCell(List<String> item) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(item[0].toUpperCase(), style: const TextStyle(color: AppColors.textSecondary, fontSize: 10.5, letterSpacing: 0.3)),
+          const SizedBox(height: 2),
+          Text(item[1], style: const TextStyle(color: AppColors.textPrimary, fontSize: 14.5, fontWeight: FontWeight.w700)),
+        ],
       ),
     );
   }
@@ -229,8 +308,16 @@ class _ReportScreenState extends State<ReportScreen> {
           final i = entry.key + 1;
           final f = entry.value;
           final barWidth = maxImportance > 0 ? (f.importance / maxImportance) : 0.0;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
+          // Matches fromDaria's zebra-striped table rows (tr:nth-child(even)).
+          final isEven = entry.key % 2 == 1;
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isEven ? AppColors.background : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -270,11 +357,18 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   Widget _buildFooter() {
+    // Matches fromDaria/generate_report_html.py's footer structure and
+    // author credits exactly. The accuracy/AUC figures are real values from
+    // assets/models/eval_metrics.json (93.7% / 0.986) rather than Python's
+    // own footer string, which hardcodes stale numbers (95.3% / 0.990) that
+    // don't match its own eval_metrics.json — the figures here are the
+    // correct ones for this trained model.
     return const Padding(
       padding: EdgeInsets.symmetric(vertical: 12),
       child: Text(
-        'Model: XGBoost · Accuracy 93.7% · AUC-ROC 0.986\n'
-        'AI Bracelet for Early Detection of Heart Sclerosis',
+        'Generated by AI Bracelet for Early Detection of Heart Sclerosis  ·  '
+        'Model: XGBoost (AUC 0.986, Accuracy 93.7%)  ·  '
+        'Daria Gladkykh · FatemehSadat MahmoudzadehHosseini · Prof. Dr. Ing. Nicolae Goga',
         textAlign: TextAlign.center,
         style: TextStyle(color: AppColors.textSecondary, fontSize: 11, height: 1.6),
       ),
@@ -295,7 +389,16 @@ class _ReportScreenState extends State<ReportScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+          // Matches fromDaria's section-header underline (`.section h2`'s
+          // border-bottom), in the app's own accent color.
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.primaryGreen.withOpacity(0.2), width: 2)),
+            ),
+            child: Text(title, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+          ),
           const SizedBox(height: 16),
           child,
         ],

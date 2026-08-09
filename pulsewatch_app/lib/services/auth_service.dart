@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'background_sync_service.dart';
+import 'database_helper.dart';
 import 'server_service.dart';
 
 /// Handles account creation (via a researcher-issued enrollment code),
@@ -48,6 +49,23 @@ class AuthService {
   Future<String?> getRole() => _storage.read(key: _kRole);
 
   Future<String?> getUsername() => _storage.read(key: _kUsername);
+
+  /// Prefixes a SharedPreferences key with the current user's patient ID,
+  /// so per-user settings (biometric lock, upload consent, the cached risk
+  /// report, etc.) don't leak between accounts sharing this device — the
+  /// SharedPreferences equivalent of DatabaseHelper.switchUser. Returns the
+  /// bare key if no one's logged in (shouldn't normally happen — nothing
+  /// reads per-user settings before login).
+  Future<String> scopedKey(String key) async {
+    final id = await getPatientId();
+    return (id == null || id.isEmpty) ? key : '${id}_$key';
+  }
+
+  /// Points DatabaseHelper at [patientId]'s own local database — call
+  /// right after a successful login/enrollment (done automatically by
+  /// _authRequest below) and once more on cold start, after confirming an
+  /// existing session (see _AppEntryState._checkState in main.dart).
+  Future<void> switchActiveUser(String? patientId) => DatabaseHelper.instance.switchUser(patientId);
 
   Future<Map<String, String>> authHeader() async {
     final token = await getAccessToken();
@@ -97,13 +115,19 @@ class AuthService {
       final json = jsonDecode(response.body) as Map<String, dynamic>;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        final patientId = json['patient_id'] as String;
         await _storage.write(key: _kAccessToken, value: json['access_token'] as String);
         await _storage.write(key: _kRefreshToken, value: json['refresh_token'] as String);
-        await _storage.write(key: _kPatientId, value: json['patient_id'] as String);
+        await _storage.write(key: _kPatientId, value: patientId);
         await _storage.write(key: _kRole, value: json['role'] as String);
         await _storage.write(key: _kUsername, value: body['username']);
+        // Must happen before anything (Home, the walkthrough, debug
+        // seeding) touches the database — otherwise this account's first
+        // few reads/writes would still land in whichever file was open
+        // for the previous session.
+        await switchActiveUser(patientId);
         return AuthResult.success(
-          patientId: json['patient_id'] as String,
+          patientId: patientId,
           role: json['role'] as String,
         );
       }
@@ -147,6 +171,10 @@ class AuthService {
 
   Future<void> logout() async {
     await _storage.deleteAll();
+    // Closes this account's database file so nothing left open could
+    // accidentally be read from/written to before the next login points
+    // it at the right place again.
+    await switchActiveUser(null);
 
     // A logged-out install has no server session to eventually upload
     // synced BLE data to, so there's no reason to keep waking the device

@@ -16,6 +16,7 @@ class LockScreen extends StatefulWidget {
 
 class _LockScreenState extends State<LockScreen> {
   bool _isAuthenticating = false;
+  bool _lastAttemptFailed = false;
 
   @override
   void initState() {
@@ -25,12 +26,18 @@ class _LockScreenState extends State<LockScreen> {
 
   Future<void> _authenticate() async {
     if (_isAuthenticating) return;
-    setState(() => _isAuthenticating = true);
+    setState(() {
+      _isAuthenticating = true;
+      _lastAttemptFailed = false;
+    });
 
     final success = await BiometricLockService.instance.authenticate();
 
     if (!mounted) return;
-    setState(() => _isAuthenticating = false);
+    setState(() {
+      _isAuthenticating = false;
+      _lastAttemptFailed = !success;
+    });
 
     if (success) widget.onUnlocked();
   }
@@ -52,7 +59,7 @@ class _LockScreenState extends State<LockScreen> {
                   color: AppColors.primaryGreen.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Icon(Icons.lock_rounded, color: AppColors.primaryGreen, size: 36),
+                child: const Icon(Icons.fingerprint_rounded, color: AppColors.primaryGreen, size: 40),
               ),
               const SizedBox(height: 24),
               const Text(
@@ -69,6 +76,20 @@ class _LockScreenState extends State<LockScreen> {
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
               ),
+              if (_lastAttemptFailed) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.error_outline, size: 14, color: AppColors.error),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Couldn\'t verify — try again',
+                      style: TextStyle(color: AppColors.error, fontSize: 13, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 32),
               SizedBox(
                 width: double.infinity,
