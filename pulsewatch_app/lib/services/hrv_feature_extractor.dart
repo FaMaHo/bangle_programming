@@ -6,7 +6,7 @@ import 'database_helper.dart';
 class BpmSample {
   final DateTime time;
   final double bpm;
-  final double ax, ay, az; // raw accelerometer counts from Bangle.js
+  final double ax, ay, az; // raw accelerometer counts from Bangle.js, in milli-g (accel * 1000)
   final double rr; // real beat-to-beat RR interval (ms) from the watch, 0 if unavailable
 
   const BpmSample({
@@ -36,14 +36,29 @@ class HrvFeatureExtractor {
 
     // RR intervals (ms) — use the watch's real beat-to-beat value when
     // available, falling back to a BPM-derived approximation only for
-    // samples where the watch didn't report one (rr <= 0).
+    // samples where the watch didn't report one (rr <= 0). Then drop
+    // physiologically-impossible outliers (<300ms / >2000ms) — matches
+    // fromDaria/feature_extractor.py's `rr[(rr>300)&(rr<2000)]`, which the
+    // trained model's HRV features were fit on; an unfiltered fallback RR
+    // from a garbage BPM reading could otherwise swing rmssd/sdnn/pnn50/
+    // tri_index/mean_rr wildly.
     final rr = window
         .map((s) => s.rr > 0 ? s.rr : 60000.0 / s.bpm)
+        .where((v) => v > 300 && v < 2000)
         .toList();
     final n = rr.length;
     final bpms = window.map((s) => s.bpm).toList();
+    // The watch sends accel*1000 (milli-g — see bangle/lib.js's
+    // Math.round(accel.x * 1000)), but fromDaria's reference implementation
+    // — what the model was actually trained on — used raw g-units. Every
+    // accel-derived feature below must convert back, or it's off by 1000x.
+    // This single conversion is the single highest-impact correctness fix
+    // here: sedentary_time_ratio + accel_entropy + movement_variability
+    // together are 78% of the trained model's total decision weight (see
+    // assets/models/feature_importance.json), and all three are computed
+    // from this one `mags` list.
     final mags = window
-        .map((s) => math.sqrt(s.ax * s.ax + s.ay * s.ay + s.az * s.az))
+        .map((s) => math.sqrt(s.ax * s.ax + s.ay * s.ay + s.az * s.az) / 1000.0)
         .toList();
 
     // ── Time-domain HRV ──────────────────────────────────────────────────────
@@ -76,21 +91,26 @@ class HrvFeatureExtractor {
 
     // ── Accelerometer features ───────────────────────────────────────────────
     final movVar = _std(mags);
-    final meanMag = _mean(mags);
-    // Sedentary: magnitude close to resting (within 10% of mean resting mag)
-    final sedRatio = meanMag > 0
-        ? mags.where((m) => (m - meanMag).abs() < meanMag * 0.10).length /
-            mags.length
-        : 0.0;
-    final accelEntropy = _entropy(mags, 10);
+    // Absolute stillness threshold in g-units — matches fromDaria's
+    // `accel_mag < 0.05`. Previously this checked "within 10% of the
+    // session's own mean magnitude", a different definition that also
+    // produces a different number for the same data.
+    final sedRatio = mags.where((m) => m < 0.05).length / mags.length;
+    final accelEntropy = _entropyLikeReference(mags);
 
     // ── HR dynamics ──────────────────────────────────────────────────────────
-    final pulseAmp = rr.reduce(math.max) - rr.reduce(math.min);
-    final hrStepRatio = _correlation(mags, bpms);
+    final pulseAmp = rr.isEmpty ? 0.0 : rr.reduce(math.max) - rr.reduce(math.min);
+    // Step-count proxy: jerk events above a 0.1g threshold between
+    // consecutive samples — matches fromDaria's `steps_est`. Previously this
+    // held a correlation coefficient (that's chronotropic_index's formula,
+    // not hr_step_ratio's) — the two were swapped.
+    int stepsEst = 0;
+    for (int i = 1; i < mags.length; i++) {
+      if ((mags[i] - mags[i - 1]).abs() > 0.1) stepsEst++;
+    }
     final meanBpm = _mean(bpms);
-    final chronoIndex = meanBpm > 0
-        ? (bpms.reduce(math.max) - bpms.reduce(math.min)) / meanBpm
-        : 0.0;
+    final hrStepRatio = meanBpm / (stepsEst + 1);
+    final chronoIndex = _correlation(mags, bpms);
 
     final now = window.last.time;
     final slope1m = _slope(window
@@ -235,24 +255,33 @@ class HrvFeatureExtractor {
     return {'lf': lf, 'hf': hf, 'total': total};
   }
 
-  static double _entropy(List<double> vals, int numBins) {
+  /// Replicates fromDaria/feature_extractor.py's accel_entropy exactly:
+  /// `-sum(p*log(p+1e-9) for p in histogram(mag,bins=10,density=True)[0]/10)`.
+  /// numpy's density histogram (`count / (N * binWidth)`) is divided by the
+  /// bin count *again* before the entropy sum — not standard Shannon entropy
+  /// normalization, but reproducing it exactly is what matters: this is the
+  /// model's second-highest-weighted feature (26%), so matching the
+  /// reference bit-for-bit beats using a "more correct" formula that the
+  /// model wasn't trained on.
+  static double _entropyLikeReference(List<double> vals) {
+    const numBins = 10;
     if (vals.length < 2) return 0.0;
     final minV = vals.reduce(math.min);
     final maxV = vals.reduce(math.max);
-    if (maxV - minV < 1e-10) return 0.0;
-    final hist = List<int>.filled(numBins, 0);
+    final range = maxV - minV;
+    if (range < 1e-10) return 0.0;
+    final binWidth = range / numBins;
+    final counts = List<int>.filled(numBins, 0);
     for (final v in vals) {
-      final bin = ((v - minV) / (maxV - minV) * (numBins - 1))
-          .floor()
-          .clamp(0, numBins - 1);
-      hist[bin]++;
+      final bin = ((v - minV) / binWidth).floor().clamp(0, numBins - 1);
+      counts[bin]++;
     }
+    final n = vals.length;
     double entropy = 0.0;
-    for (final count in hist) {
-      if (count > 0) {
-        final p = count / vals.length;
-        entropy -= p * math.log(p) / math.log(2);
-      }
+    for (final count in counts) {
+      final density = count / (n * binWidth);
+      final p = density / numBins;
+      entropy -= p * math.log(p + 1e-9);
     }
     return entropy;
   }

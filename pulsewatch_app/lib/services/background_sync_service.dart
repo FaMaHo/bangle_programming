@@ -1,7 +1,10 @@
 import 'package:flutter/widgets.dart' show WidgetsFlutterBinding;
 import 'package:workmanager/workmanager.dart';
 import 'ble_service.dart';
+import 'notification_service.dart';
+import 'server_service.dart';
 import 'sync_log_service.dart';
+import 'upload_consent_service.dart';
 
 const _kPeriodicSyncTaskName = 'pulsewatch.periodicSync';
 const _kPeriodicSyncUniqueName = 'pulsewatch-periodic-sync';
@@ -44,11 +47,11 @@ void callbackDispatcher() {
         // future change to that logic can't turn into a Worker that never
         // returns, which would block Android from ever scheduling the next
         // run for this unique task.
+        bool syncOk;
         try {
-          final ok = await BleService()
+          syncOk = await BleService()
               .performBackgroundSync()
               .timeout(const Duration(minutes: 4));
-          return Future.value(ok);
         } catch (_) {
           // Any uncaught exception here — including the timeout above —
           // is reported to WorkManager as a failure, which triggers its
@@ -57,8 +60,43 @@ void callbackDispatcher() {
           // via SyncLogService before this point is reached in the normal
           // failure paths; this catch only guards against something
           // throwing before that logging could happen.
-          return Future.value(false);
+          syncOk = false;
         }
+
+        // Push whatever's in the phone's local DB up to the server too,
+        // if the user opted in — this is what makes upload genuinely
+        // automatic even when the app is never reopened, rather than only
+        // running when someone happens to have it foregrounded. Kept in
+        // its own try/catch and never allowed to change the return value
+        // below: WorkManager's retry/backoff scheduling is driven by
+        // whether the *BLE* sync succeeded, not the server upload, which
+        // already has its own user-facing signal (the alerts below)
+        // instead of needing the OS to keep retrying it on a schedule.
+        try {
+          if (await UploadConsentService.instance.hasConsented()) {
+            final server = ServerService.instance;
+            if (await server.shouldAutoUpload()) {
+              await server.smartUpload();
+            }
+
+            await NotificationService.initialize();
+            switch (await server.checkUploadHealth()) {
+              case UploadHealth.noConnection:
+                await NotificationService.sendConnectivityAlert();
+                break;
+              case UploadHealth.backlogRisk:
+                await NotificationService.sendUploadBacklogAlert();
+                break;
+              case UploadHealth.ok:
+                break;
+            }
+          }
+        } catch (_) {
+          // Same reasoning as above — an upload/notification hiccup here
+          // shouldn't fail the whole background task.
+        }
+
+        return Future.value(syncOk);
       default:
         return Future.value(true);
     }

@@ -42,14 +42,17 @@ class ServerService {
 
   Future<DateTime?> getLastUploadTime() async {
     final prefs = await SharedPreferences.getInstance();
-    final ms = prefs.getInt('last_upload_time');
+    final ms = prefs.getInt(await AuthService.instance.scopedKey('last_upload_time'));
     return ms != null ? DateTime.fromMillisecondsSinceEpoch(ms) : null;
   }
 
   Future<void> _saveLastUploadTime() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(
-        'last_upload_time', DateTime.now().millisecondsSinceEpoch);
+        await AuthService.instance.scopedKey('last_upload_time'), DateTime.now().millisecondsSinceEpoch);
+    // A successful upload clears whatever backlog was accumulating —
+    // see checkUploadHealth below.
+    await prefs.remove(await AuthService.instance.scopedKey('pending_since'));
   }
 
   // ─── Auto-upload eligibility ──────────────────────────────────────────────
@@ -71,6 +74,68 @@ class ServerService {
 
     final stats = await getDataStats();
     return stats.heartRateRecords > 0;
+  }
+
+  // ─── Upload health ─────────────────────────────────────────────────────────
+
+  static const _backlogEscalationHours = 12;
+
+  /// How long data has been sitting locally without reaching the server,
+  /// and whether the server is even reachable right now — the two signals
+  /// that decide whether the app needs to bother the user (a passive
+  /// "check your connection" banner/notification, or an active "upload
+  /// manually" popup + notification) instead of quietly retrying on its
+  /// own, which is what it does the rest of the time.
+  Future<UploadHealth> checkUploadHealth() async {
+    final lastReading = await _db.getLastReadingTime();
+    if (lastReading == null) return UploadHealth.ok;
+
+    final lastUpload = await getLastUploadTime();
+    final hasPending = lastUpload == null || lastReading.isAfter(lastUpload);
+
+    final prefs = await SharedPreferences.getInstance();
+    final pendingSinceKey = await AuthService.instance.scopedKey('pending_since');
+    if (!hasPending) {
+      await prefs.remove(pendingSinceKey);
+      return UploadHealth.ok;
+    }
+
+    // Tracks when the *current* unsynced streak started — not just "last
+    // successful upload" — so a run of failures is measured from when
+    // trouble actually began, not reset by new readings arriving in the
+    // meantime.
+    final pendingSinceMs = prefs.getInt(pendingSinceKey);
+    final DateTime pendingSince;
+    if (pendingSinceMs == null) {
+      pendingSince = DateTime.now();
+      await prefs.setInt(pendingSinceKey, pendingSince.millisecondsSinceEpoch);
+    } else {
+      pendingSince = DateTime.fromMillisecondsSinceEpoch(pendingSinceMs);
+    }
+
+    if (!await testConnection()) return UploadHealth.noConnection;
+
+    final hoursSincePending = DateTime.now().difference(pendingSince).inHours;
+    return hoursSincePending >= _backlogEscalationHours
+        ? UploadHealth.backlogRisk
+        : UploadHealth.ok;
+  }
+
+  /// Cooldown for the backlog-risk popup specifically (separate from the
+  /// notification's own cooldown in NotificationService) — re-nag every
+  /// few hours while the problem persists, not on every single app open.
+  Future<bool> shouldShowBacklogPopup() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastMs = prefs.getInt(await AuthService.instance.scopedKey('backlog_popup_last_shown_ms'));
+    if (lastMs == null) return true;
+    final last = DateTime.fromMillisecondsSinceEpoch(lastMs);
+    return DateTime.now().difference(last) >= const Duration(hours: 6);
+  }
+
+  Future<void> markBacklogPopupShown() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+        await AuthService.instance.scopedKey('backlog_popup_last_shown_ms'), DateTime.now().millisecondsSinceEpoch);
   }
 
   // ─── Smart upload ─────────────────────────────────────────────────────────
@@ -279,6 +344,14 @@ class ServerService {
 }
 
 // ─── Models ───────────────────────────────────────────────────────────────────
+
+/// ok: nothing pending, or pending but still well within the normal
+/// auto-upload cadence. noConnection: there's pending data and the server
+/// can't be reached at all. backlogRisk: there's pending data, the server
+/// IS reachable, but it still hasn't gone through in over
+/// [ServerService._backlogEscalationHours] — something other than a
+/// simple connectivity blip is wrong.
+enum UploadHealth { ok, noConnection, backlogRisk }
 
 class ExportResult {
   final String csv;

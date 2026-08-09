@@ -18,6 +18,7 @@
 
 import 'dart:math';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,6 +27,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:pulsewatch_app/services/database_helper.dart';
 import 'package:pulsewatch_app/services/inference_service.dart';
+import 'package:pulsewatch_app/services/pdf_report_service.dart';
 import 'package:pulsewatch_app/services/report_service.dart';
 
 /// One synthetic sample, in exactly the fields the watch/ble_service produce.
@@ -138,6 +140,44 @@ void main() {
     final dbPath = join(await getDatabasesPath(), 'pulsewatch.db');
     await databaseFactory.deleteDatabase(dbPath);
     SharedPreferences.setMockInitialValues({});
+
+    // AuthService.scopedKey (used by ReportService's cache, now that the
+    // cached report — and several other settings — are scoped per logged-in
+    // user) reads the patient ID from secure storage, which has no real
+    // platform implementation in a plain `flutter test` run. Fake it with
+    // an in-memory map so the real AuthService/ReportService code under
+    // test exercises actual per-user scoping instead of throwing
+    // MissingPluginException. See flutter_secure_storage_platform_interface's
+    // MethodChannelFlutterSecureStorage for the channel/method contract.
+    final fakeSecureStorage = <String, String>{};
+    const secureStorageChannel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(secureStorageChannel, (call) async {
+      final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+      switch (call.method) {
+        case 'read':
+          return fakeSecureStorage[args['key']];
+        case 'write':
+          fakeSecureStorage[args['key'] as String] = args['value'] as String;
+          return null;
+        case 'delete':
+          fakeSecureStorage.remove(args['key']);
+          return null;
+        case 'deleteAll':
+          fakeSecureStorage.clear();
+          return null;
+        case 'containsKey':
+          return fakeSecureStorage.containsKey(args['key']);
+        case 'readAll':
+          return fakeSecureStorage;
+        default:
+          return null;
+      }
+    });
+    // A patient ID must exist for AuthService.scopedKey to have something
+    // to scope by — mirrors a real logged-in session.
+    fakeSecureStorage['patient_id'] = 'TEST-PATIENT';
+
     await InferenceService.initialize();
   });
 
@@ -259,5 +299,15 @@ void main() {
     expect(cached!.score, closeTo(r.score, 1e-9));
     expect(cached.nWindows, r.nWindows);
     expect(cached.aggFeatures.length, r.aggFeatures.length);
+
+    // PDF export: a real multi-page document (see PdfReportService), not a
+    // screenshot — verify it actually produces well-formed PDF bytes rather
+    // than just trusting the widget tree doesn't throw.
+    final pdfBytes = await PdfReportService.build(r, r.topFeatures(importances));
+    expect(pdfBytes.length, greaterThan(1000), reason: 'suspiciously small for a real PDF');
+    final header = String.fromCharCodes(pdfBytes.take(5));
+    expect(header, '%PDF-', reason: 'must start with the PDF file signature');
+    final tail = String.fromCharCodes(pdfBytes.skip(pdfBytes.length - 8));
+    expect(tail.contains('%%EOF'), isTrue, reason: 'must end with a valid PDF EOF marker');
   }, timeout: const Timeout(Duration(minutes: 5)));
 }

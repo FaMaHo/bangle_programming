@@ -8,11 +8,13 @@ import '../services/auth_service.dart';
 class EnrollScreen extends StatefulWidget {
   final VoidCallback onEnrolled;
   final VoidCallback onSwitchToLogin;
+  final VoidCallback onBack;
 
   const EnrollScreen({
     super.key,
     required this.onEnrolled,
     required this.onSwitchToLogin,
+    required this.onBack,
   });
 
   @override
@@ -25,9 +27,34 @@ class _EnrollScreenState extends State<EnrollScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
+  final _codeFocus = FocusNode();
+  final _usernameFocus = FocusNode();
+  final _passwordFocus = FocusNode();
+  final _confirmFocus = FocusNode();
   bool _isSubmitting = false;
   String? _errorText;
   bool _obscurePassword = true;
+  AutovalidateMode _autovalidateMode = AutovalidateMode.disabled;
+
+  @override
+  void initState() {
+    super.initState();
+    // A stale server error (e.g. "invalid code") shouldn't keep showing
+    // once the user has started correcting the field it was about to — and
+    // the confirm-password field needs a live rebuild as either password
+    // changes so its match indicator stays current.
+    for (final c in [_codeController, _usernameController, _passwordController, _confirmController]) {
+      c.addListener(_onFieldChanged);
+    }
+  }
+
+  void _onFieldChanged() {
+    if (_errorText != null) {
+      setState(() => _errorText = null);
+    } else {
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
@@ -35,10 +62,18 @@ class _EnrollScreenState extends State<EnrollScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
+    _codeFocus.dispose();
+    _usernameFocus.dispose();
+    _passwordFocus.dispose();
+    _confirmFocus.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
+    // From the first submit attempt onward, re-validate live as the user
+    // types instead of only in one batch on the next tap — so a mistake
+    // gets caught (and clears) as they fix it, not just when they resubmit.
+    setState(() => _autovalidateMode = AutovalidateMode.onUserInteraction);
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -68,43 +103,52 @@ class _EnrollScreenState extends State<EnrollScreen> {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
           child: Form(
             key: _formKey,
+            autovalidateMode: _autovalidateMode,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back_rounded, color: AppColors.textPrimary),
+                  tooltip: 'Back',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+                const SizedBox(height: 12),
                 Container(
-                  width: 56,
-                  height: 56,
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
                     color: AppColors.primaryGreen.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  child: const Icon(Icons.key_rounded, color: AppColors.primaryGreen, size: 28),
+                  child: const Icon(Icons.key_rounded, color: AppColors.primaryGreen, size: 24),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 const Text(
                   'Set up your\naccount',
                   style: TextStyle(
                     color: AppColors.textPrimary,
-                    fontSize: 30,
+                    fontSize: 26,
                     fontWeight: FontWeight.w800,
                     height: 1.15,
                     letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 const Text(
                   'Enter the code your researcher gave you,\nthen choose a username and password.',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.5),
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.4),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 20),
 
                 if (_errorText != null) ...[
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: AppColors.error.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(12),
@@ -112,23 +156,25 @@ class _EnrollScreenState extends State<EnrollScreen> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 18),
-                        const SizedBox(width: 10),
+                        const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 16),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(_errorText!,
-                              style: const TextStyle(color: AppColors.error, fontSize: 13)),
+                              style: const TextStyle(color: AppColors.error, fontSize: 12)),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                 ],
 
                 _buildLabel('Enrollment code'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 TextFormField(
                   controller: _codeController,
+                  focusNode: _codeFocus,
                   textCapitalization: TextCapitalization.characters,
+                  textInputAction: TextInputAction.next,
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
                     LengthLimitingTextInputFormatter(8),
@@ -136,24 +182,30 @@ class _EnrollScreenState extends State<EnrollScreen> {
                   style: const TextStyle(letterSpacing: 3, fontWeight: FontWeight.w600),
                   decoration: _inputDecoration(hint: 'ABCD1234', icon: Icons.qr_code_rounded),
                   validator: (v) =>
-                      (v == null || v.trim().length < 6) ? 'Enter the 8-character code' : null,
+                      (v == null || v.trim().length < 8) ? 'Enter the 8-character code' : null,
+                  onFieldSubmitted: (_) => _usernameFocus.requestFocus(),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 14),
 
                 _buildLabel('Choose a username'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 TextFormField(
                   controller: _usernameController,
+                  focusNode: _usernameFocus,
+                  textInputAction: TextInputAction.next,
                   decoration: _inputDecoration(hint: 'e.g. maria_p', icon: Icons.person_outline_rounded),
                   validator: (v) =>
                       (v == null || v.trim().isEmpty) ? 'Enter a username' : null,
+                  onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 14),
 
                 _buildLabel('Choose a password'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 TextFormField(
                   controller: _passwordController,
+                  focusNode: _passwordFocus,
+                  textInputAction: TextInputAction.next,
                   obscureText: _obscurePassword,
                   decoration: _inputDecoration(
                     hint: 'At least 8 characters',
@@ -164,30 +216,58 @@ class _EnrollScreenState extends State<EnrollScreen> {
                         color: AppColors.textSecondary,
                         size: 20,
                       ),
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                       onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                   validator: (v) => (v == null || v.length < 8)
                       ? 'Password must be at least 8 characters'
                       : null,
+                  onFieldSubmitted: (_) => _confirmFocus.requestFocus(),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 14),
 
                 _buildLabel('Confirm password'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 TextFormField(
                   controller: _confirmController,
+                  focusNode: _confirmFocus,
+                  textInputAction: TextInputAction.done,
                   obscureText: _obscurePassword,
-                  decoration: _inputDecoration(hint: 'Re-enter password', icon: Icons.lock_outline_rounded),
+                  decoration: _inputDecoration(
+                    hint: 'Re-enter password',
+                    icon: Icons.lock_outline_rounded,
+                    suffix: IconButton(
+                      icon: Icon(
+                        _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                        color: AppColors.textSecondary,
+                        size: 20,
+                      ),
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    ),
+                  ),
                   validator: (v) =>
                       (v != _passwordController.text) ? 'Passwords do not match' : null,
                   onFieldSubmitted: (_) => _submit(),
                 ),
+                if (_confirmController.text.isNotEmpty &&
+                    _passwordController.text == _confirmController.text) ...[
+                  const SizedBox(height: 8),
+                  const Row(
+                    children: [
+                      Icon(Icons.check_circle_rounded, color: AppColors.primaryGreen, size: 14),
+                      SizedBox(width: 6),
+                      Text('Passwords match',
+                          style: TextStyle(color: AppColors.primaryGreen, fontSize: 12)),
+                    ],
+                  ),
+                ],
 
-                const SizedBox(height: 32),
+                const SizedBox(height: 22),
                 SizedBox(
                   width: double.infinity,
-                  height: 56,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _isSubmitting ? null : _submit,
                     style: ElevatedButton.styleFrom(
@@ -207,7 +287,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
                 Center(
                   child: TextButton(
                     onPressed: _isSubmitting ? null : widget.onSwitchToLogin,
@@ -249,7 +329,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
       suffixIcon: suffix,
       filled: true,
       fillColor: AppColors.cardBackground,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: Colors.grey.withOpacity(0.2)),

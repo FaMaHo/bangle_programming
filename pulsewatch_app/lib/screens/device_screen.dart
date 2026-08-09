@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../debug/debug_panel.dart';
 import '../theme/app_theme.dart';
 import '../services/ble_service.dart';
 import '../services/database_helper.dart';
@@ -614,9 +616,20 @@ class _DeviceScreenState extends State<DeviceScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Device',
-            style: Theme.of(context).textTheme.headlineLarge,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Device',
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+              if (kDebugMode)
+                IconButton(
+                  icon: const Icon(Icons.science_outlined, color: AppColors.textSecondary),
+                  tooltip: 'Preview controls',
+                  onPressed: () => DebugPanel.show(context),
+                ),
+            ],
           ),
           const SizedBox(height: 24),
 

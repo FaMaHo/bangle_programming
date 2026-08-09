@@ -4,6 +4,8 @@ import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_lock_service.dart';
 import '../services/server_service.dart';
+import '../services/upload_consent_service.dart';
+import '../widgets/app_bottom_sheet.dart';
 
 /// Account and app settings — separate from the Upload page, which is
 /// about where data goes rather than who the user is.
@@ -18,7 +20,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _displayName = '';
   String _patientId = '';
   bool _biometricSupported = false;
-  bool _biometricEnabled = true;
+  bool _biometricEnabled = false;
+  bool _uploadConsentGiven = true; // matches UploadConsentService's default-on
 
   @override
   void initState() {
@@ -31,6 +34,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final id = await ServerService.instance.getPatientId();
     final biometricSupported = await BiometricLockService.instance.isDeviceSupported();
     final biometricEnabled = await BiometricLockService.instance.isEnabled();
+    final uploadConsentGiven = await UploadConsentService.instance.hasConsented();
 
     if (mounted) {
       setState(() {
@@ -38,34 +42,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _patientId = id;
         _biometricSupported = biometricSupported;
         _biometricEnabled = biometricEnabled;
+        _uploadConsentGiven = uploadConsentGiven;
       });
     }
   }
 
   Future<void> _toggleBiometricLock(bool value) async {
+    if (value) {
+      // Never turn the lock on without confirming it actually works — a
+      // failed/cancelled check (wet fingers, declined prompt) would
+      // otherwise silently enable a lock with no way back in.
+      final success = await BiometricLockService.instance.authenticate();
+      if (!success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Couldn\'t verify — lock not enabled. Try again.')),
+          );
+        }
+        return;
+      }
+    }
     await BiometricLockService.instance.setEnabled(value);
     if (mounted) setState(() => _biometricEnabled = value);
   }
 
+  Future<void> _toggleUploadConsent(bool value) async {
+    if (!value) {
+      // This is exactly the data the research project depends on, so
+      // turning it off isn't a silent flip — explain why it matters and
+      // give the user a chance to reconsider before it actually happens.
+      final keepSharing = await showAppConfirmSheet(
+        context: context,
+        icon: Icons.science_outlined,
+        iconColor: AppColors.primaryGreen,
+        title: 'Before you turn this off',
+        body: 'PulseWatch AI is a research project studying cardiac risk '
+            'from everyday wearable data. Every reading you share helps '
+            "train and validate the model — for you and for future "
+            "participants. Turning this off means your data stops "
+            'reaching the research team automatically.',
+        primaryLabel: 'Keep sharing my data',
+        secondaryLabel: 'Turn off anyway',
+      );
+      // Anything other than an explicit "Turn off anyway" (the secondary
+      // button, which pops false) leaves the setting untouched — including
+      // "Keep sharing" and dismissing the sheet without choosing.
+      if (keepSharing != false) return;
+    }
+
+    await UploadConsentService.instance.setConsent(value);
+    // If this is toggled from Settings before the one-time prompt was ever
+    // shown, treat that as having answered — no need to still ask later.
+    await UploadConsentService.instance.markAsked();
+    if (mounted) setState(() => _uploadConsentGiven = value);
+  }
+
   Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppConfirmSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Log out?'),
-        content: const Text(
-          'You\'ll need your username and password (or a new enrollment code) to log back in.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Log out', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
-      ),
+      icon: Icons.logout_rounded,
+      iconColor: AppColors.error,
+      title: 'Log out?',
+      body: 'You\'ll need your username and password (or a new enrollment '
+          'code) to log back in.',
+      primaryLabel: 'Log out',
+      secondaryLabel: 'Cancel',
+      primaryIsDestructive: true,
     );
 
     if (confirmed != true) return;
@@ -104,8 +146,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             if (_biometricSupported) ...[
               const SizedBox(height: 12),
-              _AppLockToggle(enabled: _biometricEnabled, onChanged: _toggleBiometricLock),
+              _SettingsToggle(
+                icon: Icons.fingerprint_rounded,
+                label: 'App lock',
+                enabled: _biometricEnabled,
+                onChanged: _toggleBiometricLock,
+              ),
             ],
+            const SizedBox(height: 12),
+            _SettingsToggle(
+              icon: Icons.cloud_upload_rounded,
+              label: 'Automatic upload',
+              enabled: _uploadConsentGiven,
+              onChanged: _toggleUploadConsent,
+            ),
           ],
         ),
       ),
@@ -190,11 +244,18 @@ class _ProfileCard extends StatelessWidget {
   }
 }
 
-class _AppLockToggle extends StatelessWidget {
+class _SettingsToggle extends StatelessWidget {
+  final IconData icon;
+  final String label;
   final bool enabled;
   final ValueChanged<bool> onChanged;
 
-  const _AppLockToggle({required this.enabled, required this.onChanged});
+  const _SettingsToggle({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -213,12 +274,12 @@ class _AppLockToggle extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.fingerprint_rounded, color: AppColors.primaryGreen, size: 22),
+          Icon(icon, color: AppColors.primaryGreen, size: 22),
           const SizedBox(width: 14),
-          const Expanded(
+          Expanded(
             child: Text(
-              'App lock',
-              style: TextStyle(
+              label,
+              style: const TextStyle(
                   color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),

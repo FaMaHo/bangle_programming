@@ -5,11 +5,13 @@ import '../services/auth_service.dart';
 class LoginScreen extends StatefulWidget {
   final VoidCallback onLoggedIn;
   final VoidCallback onSwitchToEnroll;
+  final VoidCallback onBack;
 
   const LoginScreen({
     super.key,
     required this.onLoggedIn,
     required this.onSwitchToEnroll,
+    required this.onBack,
   });
 
   @override
@@ -20,18 +22,39 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _usernameFocus = FocusNode();
+  final _passwordFocus = FocusNode();
   bool _isSubmitting = false;
   String? _errorText;
   bool _obscurePassword = true;
+  AutovalidateMode _autovalidateMode = AutovalidateMode.disabled;
+
+  @override
+  void initState() {
+    super.initState();
+    // A stale "wrong password" error shouldn't keep showing once the user
+    // has started correcting either field.
+    _usernameController.addListener(_clearError);
+    _passwordController.addListener(_clearError);
+  }
+
+  void _clearError() {
+    if (_errorText != null) setState(() => _errorText = null);
+  }
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _usernameFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
+    // From the first submit attempt onward, re-validate live as the user
+    // types instead of only in one batch on the next tap.
+    setState(() => _autovalidateMode = AutovalidateMode.onUserInteraction);
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -60,47 +83,56 @@ class _LoginScreenState extends State<LoginScreen> {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
           child: Form(
             key: _formKey,
+            autovalidateMode: _autovalidateMode,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back_rounded, color: AppColors.textPrimary),
+                  tooltip: 'Back',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+                const SizedBox(height: 12),
                 Container(
-                  width: 56,
-                  height: 56,
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
                     color: AppColors.primaryGreen.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Icon(Icons.favorite_rounded,
-                      color: AppColors.primaryGreen, size: 28),
+                      color: AppColors.primaryGreen, size: 24),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 const Text(
                   'Welcome back',
                   style: TextStyle(
                     color: AppColors.textPrimary,
-                    fontSize: 30,
+                    fontSize: 26,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 const Text(
                   'Log in with the username and password\nyou set up earlier.',
                   style: TextStyle(
                     color: AppColors.textSecondary,
-                    fontSize: 14,
-                    height: 1.5,
+                    fontSize: 13,
+                    height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 20),
 
                 if (_errorText != null) ...[
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: AppColors.error.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(12),
@@ -109,29 +141,34 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Row(
                       children: [
                         const Icon(Icons.error_outline_rounded,
-                            color: AppColors.error, size: 18),
-                        const SizedBox(width: 10),
+                            color: AppColors.error, size: 16),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             _errorText!,
-                            style: const TextStyle(color: AppColors.error, fontSize: 13),
+                            style: const TextStyle(color: AppColors.error, fontSize: 12),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                 ],
 
                 TextFormField(
                   controller: _usernameController,
+                  focusNode: _usernameFocus,
+                  textInputAction: TextInputAction.next,
                   decoration: _inputDecoration(hint: 'Username', icon: Icons.person_outline_rounded),
                   validator: (v) =>
                       (v == null || v.trim().isEmpty) ? 'Enter your username' : null,
+                  onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _passwordController,
+                  focusNode: _passwordFocus,
+                  textInputAction: TextInputAction.done,
                   obscureText: _obscurePassword,
                   decoration: _inputDecoration(
                     hint: 'Password',
@@ -142,6 +179,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: AppColors.textSecondary,
                         size: 20,
                       ),
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                       onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
@@ -150,10 +188,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   onFieldSubmitted: (_) => _submit(),
                 ),
 
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
                 SizedBox(
                   width: double.infinity,
-                  height: 56,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _isSubmitting ? null : _submit,
                     style: ElevatedButton.styleFrom(
@@ -203,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
       suffixIcon: suffix,
       filled: true,
       fillColor: AppColors.cardBackground,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: Colors.grey.withOpacity(0.2)),
