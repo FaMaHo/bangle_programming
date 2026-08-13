@@ -185,6 +185,22 @@ class ReportService {
     await prefs.remove(await AuthService.instance.scopedKey(_prefsKey));
   }
 
+  /// Debug-only: clears the cached report, the session-start anchor, and
+  /// the paused flag together — so re-seeding a scenario (see
+  /// lib/debug/debug_data_seeder.dart) always starts from a clean slate
+  /// instead of inheriting leftover state from whatever was seeded/tested
+  /// before it (a stale session-start anchor would otherwise make
+  /// freshly-seeded coverage compute against the wrong start time, and a
+  /// leftover paused flag would hide a fresh session behind the paused
+  /// card). No-op in release builds — see kDebugMode.
+  static Future<void> debugResetSession() async {
+    if (!kDebugMode) return;
+    await debugClearCachedReport();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(await AuthService.instance.scopedKey(_sessionStartKey));
+    await prefs.remove(await AuthService.instance.scopedKey(_pausedKey));
+  }
+
   static const _sessionStartKey = 'session_start_v1';
 
   /// Anchors "the current session" to a fixed point in time instead of an

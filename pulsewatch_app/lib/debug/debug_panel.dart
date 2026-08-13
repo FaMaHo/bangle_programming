@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../services/ble_service.dart';
+import '../services/report_service.dart';
 import '../services/sync_log_service.dart';
 import '../theme/app_theme.dart';
 import 'debug_data_seeder.dart';
@@ -162,6 +163,20 @@ class _DebugPanelState extends State<DebugPanel> {
                     () => DebugDataSeeder.seed(coverage: const Duration(hours: 48)),
                   ),
                   _button(
+                    'Seed 6h with signal-loss noise (0 bpm)',
+                    () => DebugDataSeeder.seed(
+                      coverage: const Duration(hours: 6),
+                      zeroBpmNoiseRate: 0.01,
+                    ),
+                  ),
+                  _button(
+                    'Seed 14h, went quiet 30h ago',
+                    () => DebugDataSeeder.seed(
+                      coverage: const Duration(hours: 14),
+                      endAt: DateTime.now().subtract(const Duration(hours: 30)),
+                    ),
+                  ),
+                  _button(
                     'Clear simulated data only',
                     () => DebugDataSeeder.clearSeeded(),
                   ),
@@ -169,6 +184,10 @@ class _DebugPanelState extends State<DebugPanel> {
                     'Clear all data',
                     () => DebugDataSeeder.clearAll(),
                     destructive: true,
+                  ),
+                  _button(
+                    'Reset session (report/anchor/pause)',
+                    () => ReportService.debugResetSession(),
                   ),
                   _section('Sync diagnostics'),
                   _buildSyncLog(),
