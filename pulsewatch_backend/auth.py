@@ -73,6 +73,19 @@ def init_db():
                 used_at TEXT
             )
         ''')
+        # Permanent record of every reset code ever minted, kept even after
+        # the code above is claimed or replaced — so "who issued a reset for
+        # this patient, and when" survives regardless of that row's later
+        # deletion/reuse. Not used for auth, only for the researcher-facing
+        # history on the patient page.
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS reset_code_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id TEXT NOT NULL,
+                generated_by TEXT NOT NULL,
+                generated_at TEXT NOT NULL
+            )
+        ''')
 
 
 def generate_patient_id():
@@ -211,10 +224,20 @@ def change_password(username, current_password, new_password):
         return True, None
 
 
-def create_reset_code(patient_id, ttl_hours=72):
+def create_reset_code(patient_id, generated_by, ttl_hours=24):
     """Researcher-side: mint a one-time code that lets an existing patient
     set a new password on their own account (see password_reset_codes'
     table comment for why this exists instead of an emailed reset link).
+    Shorter-lived than an enrollment code (24h vs 72h) since it's normally
+    handed over in a single back-and-forth, not scheduled in advance.
+
+    [generated_by] is the researcher's username, recorded permanently in
+    reset_code_audit_log regardless of whether the code is ever claimed.
+
+    Any earlier unclaimed code for this patient is dropped first, so at
+    most one reset code is ever live per patient — an old code a researcher
+    forgot to mention can't quietly stay valid alongside a newer one.
+
     Returns (code, None) on success, or (None, error_message) if the
     patient_id doesn't match any account."""
     with _connect() as db:
@@ -224,6 +247,11 @@ def create_reset_code(patient_id, ttl_hours=72):
         if existing is None:
             return None, 'No account found for that Research ID'
 
+        db.execute(
+            'DELETE FROM password_reset_codes WHERE patient_id = ? AND used_at IS NULL',
+            (patient_id,),
+        )
+
         code = _generate_code()
         now = _now()
         expires = now + timedelta(hours=ttl_hours)
@@ -231,6 +259,11 @@ def create_reset_code(patient_id, ttl_hours=72):
             'INSERT INTO password_reset_codes (code, patient_id, created_at, expires_at) '
             'VALUES (?, ?, ?, ?)',
             (code, patient_id, now.isoformat(), expires.isoformat()),
+        )
+        db.execute(
+            'INSERT INTO reset_code_audit_log (patient_id, generated_by, generated_at) '
+            'VALUES (?, ?, ?)',
+            (patient_id, generated_by, now.isoformat()),
         )
         return code, None
 
@@ -299,3 +332,15 @@ def get_patient_by_id(patient_id):
             (patient_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_reset_code_history(patient_id):
+    """Researcher-side: every reset code ever generated for this patient,
+    newest first — who issued it and when, not the code itself."""
+    with _connect() as db:
+        rows = db.execute(
+            'SELECT generated_by, generated_at FROM reset_code_audit_log '
+            'WHERE patient_id = ? ORDER BY generated_at DESC',
+            (patient_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]

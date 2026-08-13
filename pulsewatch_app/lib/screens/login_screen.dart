@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import '../widgets/forgot_password_sheet.dart';
 
 class LoginScreen extends StatefulWidget {
   final VoidCallback onLoggedIn;
@@ -187,8 +188,20 @@ class _LoginScreenState extends State<LoginScreen> {
                       (v == null || v.isEmpty) ? 'Enter your password' : null,
                   onFieldSubmitted: (_) => _submit(),
                 ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _isSubmitting
+                        ? null
+                        : () => showForgotPasswordSheet(context, onLoggedIn: widget.onLoggedIn),
+                    child: const Text(
+                      'Forgot password?',
+                      style: TextStyle(color: AppColors.primaryGreen, fontWeight: FontWeight.w600, fontSize: 13),
+                    ),
+                  ),
+                ),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
                   height: 52,

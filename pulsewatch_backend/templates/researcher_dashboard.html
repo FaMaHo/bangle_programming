@@ -23,7 +23,15 @@
   </form>
 
   {% if patients %}
-  <table>
+  <input
+    type="text"
+    id="patient-search"
+    placeholder="Search by username or Research ID..."
+    autocomplete="off"
+    style="width:100%; padding:10px 14px; margin-bottom:16px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text-primary); font-size:14px;"
+    onkeyup="filterPatients()"
+  >
+  <table id="patient-table">
     <thead>
       <tr>
         <th>Username</th>
@@ -34,7 +42,7 @@
     </thead>
     <tbody>
       {% for p in patients %}
-      <tr>
+      <tr data-search="{{ p.username|lower }} {{ p.patient_id|lower }}">
         <td>{{ p.username }}</td>
         <td><code>{{ p.patient_id }}</code></td>
         <td class="muted">{{ p.created_at[:10] }}</td>
@@ -43,6 +51,20 @@
       {% endfor %}
     </tbody>
   </table>
+  <p id="patient-search-empty" class="muted" style="display:none;">No patients match that search.</p>
+  <script>
+    function filterPatients() {
+      const q = document.getElementById('patient-search').value.trim().toLowerCase();
+      const rows = document.querySelectorAll('#patient-table tbody tr');
+      let visibleCount = 0;
+      rows.forEach(row => {
+        const match = row.dataset.search.includes(q);
+        row.style.display = match ? '' : 'none';
+        if (match) visibleCount++;
+      });
+      document.getElementById('patient-search-empty').style.display = visibleCount === 0 ? '' : 'none';
+    }
+  </script>
   {% else %}
   <p>No patients enrolled yet.</p>
   {% endif %}
