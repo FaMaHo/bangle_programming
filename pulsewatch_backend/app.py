@@ -482,13 +482,14 @@ def researcher_patient_detail(patient_id):
         deleted_message=deleted_message,
         reset_code=request.args.get('reset_code'),
         reset_error=request.args.get('reset_error'),
+        reset_code_history=accounts.get_reset_code_history(patient_id),
     )
 
 
 @app.route('/researcher/patient/<patient_id>/generate-reset-code', methods=['POST'])
 @researcher_web_required
 def researcher_generate_reset_code(patient_id):
-    code, error = accounts.create_reset_code(patient_id)
+    code, error = accounts.create_reset_code(patient_id, generated_by=session.get('username'))
     if error:
         return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_error=error))
     return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_code=code))
