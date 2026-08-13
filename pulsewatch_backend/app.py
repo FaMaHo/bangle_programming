@@ -11,6 +11,7 @@ from flask import (
 )
 import os
 import secrets
+import shutil
 import sys
 import io
 import base64
@@ -95,6 +96,12 @@ def _tokens_for(user):
         'refresh_token': create_refresh_token(identity=user['username'], additional_claims=extra_claims),
         'patient_id': user['patient_id'],
         'role': user['role'],
+        # The app already knows its own username after /auth/login or
+        # /auth/claim (it just typed it into the form), but /auth/reset-password
+        # logs a patient in without them typing a username anywhere — this
+        # is the only way that flow can learn it, to store locally same as
+        # the other two.
+        'username': user['username'],
     }
 
 
@@ -106,6 +113,28 @@ def researcher_required(fn):
             return jsonify({'error': 'Researcher access required'}), 403
         return fn(*args, **kwargs)
     return wrapper
+
+
+def _safe_patient_session_path(patient_id, session_id):
+    """Resolve patient_data/<patient_id>/<session_id>, refusing to return a
+    path outside that patient's folder — session_id/patient_id land here
+    from URL segments and form fields, so a '../' can't be trusted blindly."""
+    patient_root = os.path.abspath(os.path.join(UPLOAD_FOLDER, patient_id))
+    session_path = os.path.abspath(os.path.join(patient_root, session_id))
+    if os.path.commonpath([patient_root, session_path]) != patient_root:
+        return None
+    return session_path
+
+
+def _session_upload_date(session_path):
+    """Earliest file mtime in a session folder, as the date a researcher
+    would recognize as 'when this was uploaded'."""
+    try:
+        entries = [os.path.join(session_path, f) for f in os.listdir(session_path)]
+        mtimes = [os.path.getmtime(p) for p in entries] or [os.path.getmtime(session_path)]
+        return datetime.fromtimestamp(min(mtimes)).strftime('%Y-%m-%d %H:%M')
+    except OSError:
+        return None
 
 
 def researcher_web_required(fn):
@@ -296,6 +325,51 @@ def auth_refresh():
     return jsonify({'access_token': access_token}), 200
 
 
+@app.route('/auth/change-password', methods=['POST'])
+@jwt_required()
+@limiter.limit('10/minute')
+def auth_change_password():
+    """Self-service — the app already has a valid session; this just
+    proves the caller still knows the current password before changing it."""
+    data = request.get_json(silent=True) or {}
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not current_password or not new_password:
+        return jsonify({'error': 'current_password and new_password are required'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    ok, error = accounts.change_password(get_jwt_identity(), current_password, new_password)
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'success': True}), 200
+
+
+@app.route('/auth/reset-password', methods=['POST'])
+@limiter.limit('10/minute')
+def auth_reset_password():
+    """Redeems a researcher-issued reset code (see
+    /researcher/patient/<patient_id>/generate-reset-code) — the forgot-
+    password path for a patient who's locked out and can't prove identity
+    with a current password. Logs them straight back in on success, same
+    as /auth/claim does for a brand-new account."""
+    data = request.get_json(silent=True) or {}
+    code = data.get('code', '')
+    new_password = data.get('new_password', '')
+
+    if not code or not new_password:
+        return jsonify({'error': 'code and new_password are required'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    user, error = accounts.claim_reset_code(code, new_password)
+    if error:
+        return jsonify({'error': error}), 400
+
+    return jsonify(_tokens_for(user)), 200
+
+
 # ─── Website ─────────────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -384,14 +458,71 @@ def researcher_patient_detail(patient_id):
             session_path = os.path.join(patient_path, session_id)
             if os.path.isdir(session_path):
                 csv_files = [f for f in os.listdir(session_path) if f.endswith('.csv')]
-                sessions.append({'session_id': session_id, 'file_count': len(csv_files)})
+                sessions.append({
+                    'session_id': session_id,
+                    'file_count': len(csv_files),
+                    'date': _session_upload_date(session_path),
+                })
+
+    deleted_count = request.args.get('deleted_count')
+    if deleted_count == 'all':
+        deleted_message = 'All uploaded data for this patient has been deleted.'
+    elif deleted_count:
+        deleted_message = f'{deleted_count} session(s) deleted.'
+    elif request.args.get('deleted'):
+        deleted_message = f"Session {request.args.get('deleted')} deleted."
+    else:
+        deleted_message = None
 
     return render_template(
         'researcher_patient.html',
         patient_id=patient_id,
         patient=patient,
         sessions=sessions,
+        deleted_message=deleted_message,
+        reset_code=request.args.get('reset_code'),
+        reset_error=request.args.get('reset_error'),
     )
+
+
+@app.route('/researcher/patient/<patient_id>/generate-reset-code', methods=['POST'])
+@researcher_web_required
+def researcher_generate_reset_code(patient_id):
+    code, error = accounts.create_reset_code(patient_id)
+    if error:
+        return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_error=error))
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_code=code))
+
+
+@app.route('/researcher/patient/<patient_id>/session/<session_id>/delete', methods=['POST'])
+@researcher_web_required
+def researcher_delete_session(patient_id, session_id):
+    session_path = _safe_patient_session_path(patient_id, session_id)
+    if session_path and os.path.isdir(session_path):
+        shutil.rmtree(session_path)
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted=session_id))
+
+
+@app.route('/researcher/patient/<patient_id>/sessions/delete', methods=['POST'])
+@researcher_web_required
+def researcher_delete_sessions(patient_id):
+    session_ids = request.form.getlist('session_ids')
+    deleted = 0
+    for session_id in session_ids:
+        session_path = _safe_patient_session_path(patient_id, session_id)
+        if session_path and os.path.isdir(session_path):
+            shutil.rmtree(session_path)
+            deleted += 1
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted_count=deleted))
+
+
+@app.route('/researcher/patient/<patient_id>/delete-all', methods=['POST'])
+@researcher_web_required
+def researcher_delete_all_data(patient_id):
+    patient_path = _safe_patient_session_path(patient_id, '.')
+    if patient_path and os.path.isdir(patient_path):
+        shutil.rmtree(patient_path)
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, deleted_count='all'))
 
 
 @app.route('/researcher/patient/<patient_id>/session/<session_id>/download')

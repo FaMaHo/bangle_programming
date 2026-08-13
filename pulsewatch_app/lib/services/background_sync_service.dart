@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart' show WidgetsFlutterBinding;
 import 'package:workmanager/workmanager.dart';
+import 'auth_service.dart';
 import 'ble_service.dart';
 import 'notification_service.dart';
 import 'server_service.dart';
@@ -24,6 +25,26 @@ const _kPeriodicSyncUniqueName = 'pulsewatch-periodic-sync';
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Points DatabaseHelper at the signed-in patient's own database file
+    // before any of the DB-touching work below runs. This isolate is a
+    // fresh Dart VM with none of the main isolate's in-memory state —
+    // including DatabaseHelper's _activeUserId — so without this, every
+    // write here silently fell back to the generic unscoped database file
+    // instead of the patient's own scoped one. In practice that meant most
+    // of a real session's data — everything captured by this background
+    // task rather than an interactive foreground sync — was actually being
+    // recorded, just into a file the app never reads from, making it look
+    // like large stretches of real wear time were gaps. Read from secure
+    // storage rather than memory because that's the one thing that
+    // actually survives across isolates.
+    try {
+      final patientId = await AuthService.instance.getPatientId();
+      await AuthService.instance.switchActiveUser(patientId);
+    } catch (_) {
+      // Best-effort — if this fails, the sync below still runs rather than
+      // skipping entirely, even though it risks writing to the wrong file.
+    }
 
     switch (task) {
       case _kPeriodicSyncTaskName:

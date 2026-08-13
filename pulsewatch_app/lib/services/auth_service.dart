@@ -97,6 +97,60 @@ class AuthService {
     });
   }
 
+  /// Redeems a researcher-issued reset code for a brand-new password on an
+  /// existing account — the forgotten-password path. No email/SMS exists
+  /// to send a link to (see auth.py's password_reset_codes table comment),
+  /// so a researcher vouches for identity the same way they do at
+  /// enrollment. Logs the patient straight back in on success, exactly
+  /// like [claim] does.
+  Future<AuthResult> resetPassword({
+    required String code,
+    required String newPassword,
+  }) async {
+    if (newPassword.length < 8) {
+      return AuthResult.failure('Password must be at least 8 characters');
+    }
+    return _authRequest('/auth/reset-password', {
+      'code': code.trim(),
+      'new_password': newPassword,
+    });
+  }
+
+  /// Self-service password change for an already-logged-in user — proves
+  /// they still know the current password rather than a researcher having
+  /// to vouch for them (that's [resetPassword], for when they're locked
+  /// out instead). Doesn't touch stored tokens: the session itself doesn't
+  /// change, just the password that opens it.
+  Future<SimpleResult> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    if (newPassword.length < 8) {
+      return SimpleResult.failure('Password must be at least 8 characters');
+    }
+    try {
+      final serverUrl = await ServerService.instance.getServerUrl();
+      if (serverUrl == null || serverUrl.isEmpty) {
+        return SimpleResult.failure('Server URL not configured.');
+      }
+
+      final response = await http
+          .post(
+            Uri.parse('$serverUrl/auth/change-password'),
+            headers: {'Content-Type': 'application/json', ...await authHeader()},
+            body: jsonEncode({'current_password': currentPassword, 'new_password': newPassword}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) return SimpleResult.success();
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return SimpleResult.failure((json['error'] as String?) ?? 'Something went wrong.');
+    } catch (_) {
+      return SimpleResult.failure('Could not reach the server. Check your connection.');
+    }
+  }
+
   Future<AuthResult> _authRequest(String path, Map<String, String> body) async {
     try {
       final serverUrl = await ServerService.instance.getServerUrl();
@@ -120,7 +174,11 @@ class AuthService {
         await _storage.write(key: _kRefreshToken, value: json['refresh_token'] as String);
         await _storage.write(key: _kPatientId, value: patientId);
         await _storage.write(key: _kRole, value: json['role'] as String);
-        await _storage.write(key: _kUsername, value: body['username']);
+        // Prefer the server's own record of the username over what the
+        // request body happened to carry — /auth/reset-password's body has
+        // no username field at all (the patient never types one for that
+        // flow, just a code), so it relies on this being present.
+        await _storage.write(key: _kUsername, value: (json['username'] as String?) ?? body['username']);
         // Must happen before anything (Home, the walkthrough, debug
         // seeding) touches the database — otherwise this account's first
         // few reads/writes would still land in whichever file was open
@@ -202,4 +260,18 @@ class AuthResult {
       AuthResult._(true, null, patientId, role);
 
   factory AuthResult.failure(String error) => AuthResult._(false, error, null, null);
+}
+
+/// Plain success/error result for actions that don't return auth tokens —
+/// [AuthService.changePassword] doesn't touch the session, so returning a
+/// full AuthResult (which promises a patientId/role) would be misleading.
+class SimpleResult {
+  final bool success;
+  final String? error;
+
+  SimpleResult._(this.success, this.error);
+
+  factory SimpleResult.success() => SimpleResult._(true, null);
+
+  factory SimpleResult.failure(String error) => SimpleResult._(false, error);
 }

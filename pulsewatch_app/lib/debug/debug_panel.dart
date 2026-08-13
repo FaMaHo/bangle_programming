@@ -47,6 +47,7 @@ class _DebugPanelState extends State<DebugPanel> {
     if (mounted) setState(() => _recentSync = log);
   }
 
+
   String _relativeTime(DateTime time) {
     final diff = DateTime.now().difference(time);
     if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
@@ -159,6 +160,10 @@ class _DebugPanelState extends State<DebugPanel> {
                   _button(
                     'Seed 48h — complete, triggers report',
                     () => DebugDataSeeder.seed(coverage: const Duration(hours: 48)),
+                  ),
+                  _button(
+                    'Clear simulated data only',
+                    () => DebugDataSeeder.clearSeeded(),
                   ),
                   _button(
                     'Clear all data',

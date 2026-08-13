@@ -192,7 +192,10 @@ void main() {
 
   test('ReportService.computeReport on an empty DB returns null', () async {
     final db = DatabaseHelper.instance;
-    final report = await ReportService.computeReport(db);
+    final report = await ReportService.computeReport(
+      db,
+      sessionStart: DateTime.now().subtract(const Duration(hours: 48)),
+    );
     expect(report, isNull);
   });
 
@@ -215,17 +218,16 @@ void main() {
     expect(joined.first['bpm'], samples.first.bpm);
     expect(joined.first['x'], samples.first.x);
 
-    final report = await ReportService.computeReport(db);
+    final report = await ReportService.computeReport(db, sessionStart: start);
     expect(report, isNull, reason: 'below HrvFeatureExtractor.minSamples (60) — not enough for a single valid window');
   });
 
   test('ReportService.computeReport over a full realistic 48h+ session scores correctly', () async {
     final db = DatabaseHelper.instance;
-    // Seed slightly more than 48h so the oldest couple of hours act as
-    // margin against clock drift between seeding and scoring — computeReport
-    // only looks at "the last 48h from now", so that margin is expected to
-    // fall just outside the window by the time it queries, same as it would
-    // for a real device that's been recording longer than the goal.
+    // Seeds a bit more than the 48h goal, same as a real device that kept
+    // recording past it — computeReport is anchored to the given
+    // sessionStart (here, this seeded session's actual start) rather than a
+    // rolling "last 48h from now" window, so all of it is expected to score.
     const sessionSpan = Duration(hours: 50);
     final start = DateTime.now().subtract(sessionSpan);
     final samples = _buildSyntheticSession(start: start, duration: sessionSpan, seed: 7);
@@ -238,15 +240,15 @@ void main() {
     print('Seeded ${samples.length} samples (${samples.length * 2} rows) in ${stopwatch.elapsedMilliseconds}ms');
 
     // Coverage check mirrors what home_screen.dart uses to decide the 48h
-    // gate is satisfied (home_screen gates on `coverage.length >= 48`; a
-    // continuous span not aligned to hour boundaries touches 49 distinct
-    // hour-buckets, which still correctly satisfies ">=48").
-    final coverage = await db.getHourlyMeanHR(48);
-    expect(coverage.length, greaterThanOrEqualTo(48),
-        reason: 'every one of the last 48 hours should have data (>=48 satisfies the home_screen gate)');
+    // gate is satisfied (home_screen gates on `coverageHours >= 48`, counted
+    // since the session's anchor rather than a rolling "last 48h from now"
+    // window — see ReportService.getSessionStart).
+    final coverageHours = await db.getHoursWithDataSince(start);
+    expect(coverageHours, greaterThanOrEqualTo(48),
+        reason: 'every one of the 50 seeded hours should have data (>=48 satisfies the home_screen gate)');
 
     final scoreStopwatch = Stopwatch()..start();
-    final report = await ReportService.computeReport(db);
+    final report = await ReportService.computeReport(db, sessionStart: start);
     scoreStopwatch.stop();
     // ignore: avoid_print
     print('computeReport took ${scoreStopwatch.elapsedMilliseconds}ms -> '
@@ -258,7 +260,7 @@ void main() {
     expect(r.score, inInclusiveRange(0.0, 1.0));
     expect(r.score.isNaN, isFalse);
     expect(['LOW', 'MEDIUM', 'HIGH'], contains(r.riskLevel));
-    if (r.score < 0.20) {
+    if (r.score < 0.30) {
       expect(r.riskLevel, 'LOW');
     } else if (r.score < 0.50) {
       expect(r.riskLevel, 'MEDIUM');
@@ -266,14 +268,12 @@ void main() {
       expect(r.riskLevel, 'HIGH');
     }
 
-    // Only the most recent ~48h of the 50h seeded session falls inside
-    // computeReport's "last 48h from now" cutoff — the oldest ~2h is
-    // intentional margin (see comment above), so we expect roughly 48h/2.5min
-    // windows, not the full 50h of seeded rows.
+    // computeReport now scores everything from the given sessionStart
+    // onward (no more implicit "last 48h from now" trim), so the full 50h
+    // of seeded rows should all be included.
     expect(r.nWindows, greaterThan(1000));
-    expect(r.nRows, lessThanOrEqualTo(samples.length));
-    expect(r.nRows, greaterThan(48 * 3600 - 60));
-    expect(r.durationHours, closeTo(48.0, 0.1));
+    expect(r.nRows, samples.length);
+    expect(r.durationHours, closeTo(50.0, 0.1));
     expect(r.meanHr, inInclusiveRange(40.0, 180.0));
     expect(r.meanRmssd, greaterThan(0));
 

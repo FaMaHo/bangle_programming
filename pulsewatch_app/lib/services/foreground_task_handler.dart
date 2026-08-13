@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'auth_service.dart';
 import 'connection_status_service.dart';
 
 /// Entry point flutter_foreground_task calls (in its own isolate — see
@@ -30,7 +31,24 @@ void foregroundTaskCallback() {
 /// works around that using an OS-level check instead of Dart state.
 class PulseWatchTaskHandler extends TaskHandler {
   @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    // This isolate is a fresh Dart VM, same as background_sync_service.dart's
+    // — DatabaseHelper's in-memory _activeUserId starts unset here regardless
+    // of what the main isolate already logged into. Without this,
+    // onRepeatEvent's updateNotification() below reads getLastReadingTime()
+    // from the generic unscoped database file, which stops receiving writes
+    // once the app is scoped correctly elsewhere — so the persistent
+    // notification freezes on whatever "last reading" that file last had and
+    // never updates again, even while real readings keep landing in the
+    // correctly-scoped per-user database the whole time.
+    try {
+      final patientId = await AuthService.instance.getPatientId();
+      await AuthService.instance.switchActiveUser(patientId);
+    } catch (_) {
+      // Best-effort — the notification just won't reflect real data if this
+      // fails, same fallback as background_sync_service.dart.
+    }
+  }
 
   // Fires every 60s (see ForegroundTaskOptions.eventAction in
   // ble_service.dart's _ensureForegroundServiceRunning). Purely refreshes

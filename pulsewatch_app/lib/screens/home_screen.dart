@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import '../services/background_sync_service.dart';
 import '../services/database_helper.dart';
 import '../services/ble_service.dart';
 import '../services/notification_service.dart';
@@ -10,6 +11,8 @@ import '../services/report_service.dart';
 import '../services/server_service.dart';
 import '../services/upload_consent_service.dart';
 import 'report_screen.dart';
+import '../widgets/loading_state.dart';
+import '../widgets/save_session_sheet.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 /// Home dashboard — the first thing a user sees. Answers, at a glance:
@@ -47,6 +50,14 @@ class _HomeScreenState extends State<HomeScreen> {
   final BleService _bleService = BleService();
   final ServerService _server = ServerService.instance;
 
+  // True only until the first _loadStats() completes — after that it stays
+  // false permanently (the 10s periodic refresh updates numbers in place,
+  // it doesn't re-show a loading state). Without this, a cold start after
+  // Android killed the backgrounded process rendered every stat at its
+  // zero/default value for as long as the ~7 sequential DB queries in
+  // _loadStats() took, which read as "showing old data" until it "caught
+  // up" — this makes the wait explicit instead.
+  bool _loading = true;
   bool _isConnected = false;
   int _coverageHours = 0; // distinct hours with data in the last 48h
   int _totalReadings = 0; // used only to detect the "connected, nothing collected yet" gap
@@ -65,6 +76,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   FinalReport? _report;
   bool _generatingReport = false;
+  bool _savingSession = false;
+
+  // The fixed point "the current session" is measured from — see
+  // ReportService.getSessionStart for why this can't just be "the last 48h
+  // from now". Loaded once in _loadStats and reused for every
+  // coverage/report calculation below.
+  DateTime? _sessionStart;
+
+  // True after "Save & stop for now" until "Start a new recording" is
+  // tapped — see ReportService.isPaused. Takes priority over every other
+  // _buildMainSection state: there's no "coverage" to show progress toward
+  // when nothing is being collected.
+  bool _paused = false;
 
   Timer? _statsTimer;
   Timer? _uploadHealthTimer;
@@ -121,10 +145,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// collected. No-op if a report already exists or is already generating.
   Future<void> _maybeGenerateReport() async {
     if (_report != null || _generatingReport) return;
-    if (_coverageHours < _collectionGoalHours) return;
+    if (_coverageHours < _collectionGoalHours || _sessionStart == null) return;
 
     setState(() => _generatingReport = true);
-    final report = await ReportService.computeReport(_db);
+    final report = await ReportService.computeReport(_db, sessionStart: _sessionStart!);
     if (!mounted) return;
     setState(() {
       _generatingReport = false;
@@ -132,12 +156,76 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// Archives the current report to permanent history, optionally deletes
+  /// its raw readings, then either starts a fresh 48h session right away or
+  /// pauses everything (background sync, auto-reconnect, connectivity
+  /// notifications) until the user explicitly starts a new recording from
+  /// Settings — see ReportService.isPaused.
+  Future<void> _saveSession(FinalReport report) async {
+    final choice = await showSaveSessionSheet(context);
+    if (choice == null || !mounted) return;
+
+    setState(() => _savingSession = true);
+    final sessionStart = _sessionStart ?? report.computedAt.subtract(const Duration(hours: 48));
+    await ReportService.saveReportToHistory(
+      report,
+      sessionStart: sessionStart,
+      sessionEnd: report.computedAt,
+    );
+    if (choice.deleteRawData) {
+      await ReportService.deleteSessionRawData(sessionStart: sessionStart, sessionEnd: report.computedAt);
+    }
+    await ReportService.clearCurrentReport();
+
+    final stopping = choice.action == SaveSessionAction.stop;
+    if (stopping) {
+      await ReportService.setPaused(true);
+      await BackgroundSyncService.instance.cancel();
+    } else {
+      await ReportService.startNewSession();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _savingSession = false;
+      _report = null;
+      _sessionStart = null;
+      _coverageHours = 0;
+      _paused = stopping;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(stopping ? 'Report saved — recording stopped.' : 'Report saved — starting a new session.'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    await _loadStats();
+  }
+
   Future<void> _loadStats() async {
+    // Checked first and unconditionally: while paused there's no active
+    // session to compute coverage/reports for, and _sessionStart is left
+    // untouched by "Save & stop" (see _saveSession) rather than cleared —
+    // querying coverage against that stale anchor would otherwise look
+    // like a session had already reached 48h again the moment any old raw
+    // data still qualifies, silently re-triggering report generation the
+    // user explicitly stopped.
+    if (await ReportService.isPaused()) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _paused = true;
+        });
+      }
+      return;
+    }
+
     final now = DateTime.now();
     final todayStart = DateTime(now.year, now.month, now.day);
     final yesterdayStart = todayStart.subtract(const Duration(days: 1));
 
-    final coverage = await _db.getHourlyMeanHR(_collectionGoalHours);
+    _sessionStart ??= await ReportService.getSessionStart(_db);
+    final coverageHours = await _db.getHoursWithDataSince(_sessionStart!);
     final totalReadings = await _db.getTotalReadings();
     final lastUpload = await _server.getLastUploadTime();
 
@@ -159,7 +247,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (mounted) {
       setState(() {
-        _coverageHours = coverage.length;
+        _loading = false;
+        _paused = false;
+        _coverageHours = coverageHours;
         _totalReadings = totalReadings;
         _lastUpload = lastUpload;
 
@@ -257,9 +347,16 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
           ],
 
-          KeyedSubtree(key: widget.progressCardKey, child: _buildMainSection()),
+          // The key stays attached to whatever's currently in this slot —
+          // loading placeholder or the real content — so the coach-mark
+          // walkthrough (which spotlights this exact position for new
+          // signups) always has something to find, even mid-load.
+          KeyedSubtree(
+            key: widget.progressCardKey,
+            child: _loading ? const LoadingState(message: 'Loading your dashboard…') : _buildMainSection(),
+          ),
 
-          if (_report == null) ...[
+          if (!_loading && _report == null) ...[
             const SizedBox(height: 14),
             _buildFactsGrid(),
           ],
@@ -369,6 +466,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMainSection() {
+    // State 0: paused — takes priority over everything else below; there's
+    // no coverage to show progress toward when nothing is being collected.
+    if (_paused) {
+      return _buildPausedCard();
+    }
+
     // State 1: report ready — compact summary + link to the full report
     if (_report != null) {
       return _buildReportReadyCard(_report!);
@@ -381,6 +484,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // State 3: still collecting toward (or hasn't started) the 48h goal
     return _buildProgressHeroCard();
+  }
+
+  // Status-only — the actual Stop/Start action now lives in Settings'
+  // "Recording" section, alongside Notifications and the other controls
+  // over what the app does in the background, instead of competing for
+  // space with the report card here.
+  Widget _buildPausedCard() {
+    return _heroCardChrome(
+      leading: Container(
+        width: 64,
+        height: 64,
+        decoration: BoxDecoration(color: AppColors.textSecondary.withOpacity(0.12), shape: BoxShape.circle),
+        child: const Icon(Icons.pause_rounded, color: AppColors.textSecondary, size: 32),
+      ),
+      title: 'Recording stopped',
+      caption: 'Start a new recording anytime from Settings.',
+      action: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () => widget.onNavigateToTab(3),
+          icon: const Icon(Icons.settings_outlined, size: 16),
+          label: const Text('Go to Settings'),
+        ),
+      ),
+    );
   }
 
   Widget _buildProgressHeroCard() {
@@ -448,7 +576,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _heroCardChrome({required Widget leading, required String title, required String caption}) {
+  Widget _heroCardChrome({required Widget leading, required String title, required String caption, Widget? action}) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -456,21 +584,30 @@ class _HomeScreenState extends State<HomeScreen> {
         color: AppColors.primaryGreen.withOpacity(0.10),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          leading,
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(caption, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.4)),
-              ],
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              leading,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text(caption, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.4)),
+                  ],
+                ),
+              ),
+            ],
           ),
+          if (action != null) ...[
+            const SizedBox(height: 16),
+            action,
+          ],
         ],
       ),
     );
@@ -782,6 +919,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: _savingSession ? null : () => _saveSession(report),
+              icon: _savingSession
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.archive_outlined, size: 16),
+              label: Text(_savingSession ? 'Saving…' : 'Save report…'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
             ),
           ),
         ],
