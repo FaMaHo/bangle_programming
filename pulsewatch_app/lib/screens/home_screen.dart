@@ -62,7 +62,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _coverageHours = 0; // distinct hours with data in the last 48h
   int _totalReadings = 0; // used only to detect the "connected, nothing collected yet" gap
   UploadHealth _uploadHealth = UploadHealth.ok;
-  DateTime? _lastUpload;
 
   String? _displayName;
   int? _restingHR;
@@ -89,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // _buildMainSection state: there's no "coverage" to show progress toward
   // when nothing is being collected.
   bool _paused = false;
+  bool _startingRecording = false;
 
   Timer? _statsTimer;
   Timer? _uploadHealthTimer;
@@ -154,6 +154,19 @@ class _HomeScreenState extends State<HomeScreen> {
       _generatingReport = false;
       if (report != null) _report = report;
     });
+
+    // There's nothing left to collect toward once the 48h report is ready —
+    // stop the watch connection and background sync immediately rather than
+    // leaving them running until the user gets around to tapping "Save
+    // session". The report itself still shows and stays fully reviewable/
+    // saveable (see _buildMainSection's priority order); only the
+    // underlying data collection stops.
+    if (report != null) {
+      await ReportService.setPaused(true);
+      await BackgroundSyncService.instance.cancel();
+      await _bleService.disconnect();
+      if (mounted) setState(() => _paused = true);
+    }
   }
 
   /// Archives the current report to permanent history, optionally deletes
@@ -179,6 +192,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final stopping = choice.action == SaveSessionAction.stop;
     if (stopping) {
+      // Already paused/disconnected by _maybeGenerateReport the moment the
+      // report finished computing — these are safe no-ops in that case, and
+      // still necessary as a fallback for a report loaded from cache (an
+      // older session, computed before that auto-pause existed).
       await ReportService.setPaused(true);
       await BackgroundSyncService.instance.cancel();
       // Cancelling the periodic task only stops future background syncs —
@@ -186,9 +203,13 @@ class _HomeScreenState extends State<HomeScreen> {
       // Xm ago" notification) keeps running until something else drops it
       // otherwise. See settings_screen.dart's _stopRecording for the same
       // fix and BleService.disconnect's doc comment for why.
-      await BleService().disconnect();
+      await _bleService.disconnect();
     } else {
+      // The report-ready auto-pause left this paused — undo it so the new
+      // session actually starts collecting instead of sitting there paused.
+      await ReportService.setPaused(false);
       await ReportService.startNewSession();
+      await BackgroundSyncService.instance.ensureScheduled();
     }
 
     if (!mounted) return;
@@ -209,13 +230,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadStats() async {
-    // Checked first and unconditionally: while paused there's no active
-    // session to compute coverage/reports for, and _sessionStart is left
-    // untouched by "Save & stop" (see _saveSession) rather than cleared —
-    // querying coverage against that stale anchor would otherwise look
-    // like a session had already reached 48h again the moment any old raw
-    // data still qualifies, silently re-triggering report generation the
-    // user explicitly stopped.
+    // Checked first, independent of pause state below: the report-ready
+    // auto-pause (see _maybeGenerateReport) means "paused" and "there's a
+    // report waiting to be reviewed" can both be true at once, and the
+    // report needs to survive an app restart — not just live in this
+    // screen's in-memory state — or it'd look like it vanished the moment
+    // pausing made _loadStats return early before ever checking for it.
+    if (_report == null && !_generatingReport) {
+      final cached = await ReportService.loadCachedReport();
+      if (mounted && cached != null) setState(() => _report = cached);
+    }
+
+    // While paused there's no active session to compute coverage/reports
+    // for, and _sessionStart is left untouched by "Save & stop" (see
+    // _saveSession) rather than cleared — querying coverage against that
+    // stale anchor would otherwise look like a session had already reached
+    // 48h again the moment any old raw data still qualifies, silently
+    // re-triggering report generation the user explicitly stopped (or that
+    // already ran once and auto-paused above).
     if (await ReportService.isPaused()) {
       if (mounted) {
         setState(() {
@@ -233,7 +265,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _sessionStart ??= await ReportService.getSessionStart(_db);
     final coverageHours = await _db.getHoursWithDataSince(_sessionStart!);
     final totalReadings = await _db.getTotalReadings();
-    final lastUpload = await _server.getLastUploadTime();
 
     final nocturnal = await _db.getNocturnalHR();
     final avgConfidence = await _db.getAvgConfidence(sinceMillis: todayStart.millisecondsSinceEpoch);
@@ -257,7 +288,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _paused = false;
         _coverageHours = coverageHours;
         _totalReadings = totalReadings;
-        _lastUpload = lastUpload;
 
         _restingHR = nocturnal.isNotEmpty
             ? (nocturnal.reduce((a, b) => a + b) / nocturnal.length).round()
@@ -283,13 +313,11 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
 
+    // The cached-report check at the top of this function already covers
+    // the "one exists" case — this only needs to try generating a fresh
+    // one.
     if (_report == null && !_generatingReport) {
-      final cached = await ReportService.loadCachedReport();
-      if (cached != null) {
-        if (mounted) setState(() => _report = cached);
-      } else {
-        await _maybeGenerateReport();
-      }
+      await _maybeGenerateReport();
     }
   }
 
@@ -366,9 +394,6 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 14),
             _buildFactsGrid(),
           ],
-
-          const SizedBox(height: 14),
-          _buildSyncFootnote(),
         ],
       ),
     );
@@ -472,15 +497,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMainSection() {
-    // State 0: paused — takes priority over everything else below; there's
-    // no coverage to show progress toward when nothing is being collected.
-    if (_paused) {
-      return _buildPausedCard();
-    }
-
-    // State 1: report ready — compact summary + link to the full report
+    // State 1: report ready — compact summary + link to the full report.
+    // Takes priority over the paused state below: data collection auto-
+    // stops the moment the report finishes computing (see
+    // _maybeGenerateReport), but the report itself is still what the user
+    // wants to see and act on until they've saved or dismissed it.
     if (_report != null) {
       return _buildReportReadyCard(_report!);
+    }
+
+    // State 0: paused — nothing left to show progress toward once
+    // collection has stopped and there's no pending report to review.
+    if (_paused) {
+      return _buildPausedCard();
     }
 
     // State 2: 48h reached, report not computed yet
@@ -492,10 +521,12 @@ class _HomeScreenState extends State<HomeScreen> {
     return _buildProgressHeroCard();
   }
 
-  // Status-only — the actual Stop/Start action now lives in Settings'
-  // "Recording" section, alongside Notifications and the other controls
-  // over what the app does in the background, instead of competing for
-  // space with the report card here.
+  // Puts the actual Start action right here rather than only sending the
+  // user to Settings' "Recording" section — this is the moment they're
+  // most likely to want it (they just saw "Recording stopped"), and making
+  // them navigate away for a one-tap action added friction for no reason.
+  // Settings still has the same control too, for parity with everything
+  // else that lives there.
   Widget _buildPausedCard() {
     return _heroCardChrome(
       leading: Container(
@@ -505,16 +536,37 @@ class _HomeScreenState extends State<HomeScreen> {
         child: const Icon(Icons.pause_rounded, color: AppColors.textSecondary, size: 32),
       ),
       title: 'Recording stopped',
-      caption: 'Start a new recording anytime from Settings.',
+      caption: 'Start a new recording whenever you\'re ready.',
       action: SizedBox(
         width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: () => widget.onNavigateToTab(3),
-          icon: const Icon(Icons.settings_outlined, size: 16),
-          label: const Text('Go to Settings'),
+        child: FilledButton.icon(
+          onPressed: _startingRecording ? null : _startNewRecording,
+          icon: _startingRecording
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.play_arrow_rounded, size: 18),
+          label: const Text('Start a new recording'),
         ),
       ),
     );
+  }
+
+  Future<void> _startNewRecording() async {
+    setState(() => _startingRecording = true);
+    await ReportService.setPaused(false);
+    await ReportService.startNewSession();
+    await BackgroundSyncService.instance.ensureScheduled();
+    if (!mounted) return;
+    setState(() {
+      _startingRecording = false;
+      _paused = false;
+      _coverageHours = 0;
+      _sessionStart = null;
+    });
+    await _loadStats();
   }
 
   Widget _buildProgressHeroCard() {
@@ -732,35 +784,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-  }
-
-  Widget _buildSyncFootnote() {
-    return Row(
-      children: [
-        Icon(Icons.sync, size: 13, color: AppColors.textSecondary.withOpacity(0.7)),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            _syncStatusText(),
-            style: TextStyle(color: AppColors.textSecondary.withOpacity(0.7), fontSize: 12),
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _syncStatusText() {
-    // Anything worth surfacing beyond "everything's fine" already has its
-    // own banner above (_buildUploadHealthBanner) — this line just reports
-    // the last-known-good sync time, not problem states.
-    if (_lastUpload == null) {
-      return 'Syncs automatically once your watch connects.';
-    }
-    final mins = DateTime.now().difference(_lastUpload!).inMinutes;
-    if (mins < 1) return 'Syncs automatically · synced just now';
-    if (mins < 60) return 'Syncs automatically · synced $mins min ago';
-    final hours = (mins / 60).floor();
-    return 'Syncs automatically · synced ${hours}h ago';
   }
 
   Widget _buildGeneratingCard() {

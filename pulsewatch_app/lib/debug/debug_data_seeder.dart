@@ -14,22 +14,30 @@ class DebugDataSeeder {
   static const _deviceId = 'SIMULATED-WATCH';
   static final _rand = Random();
 
-  /// Inserts one HR+accel sample per second across [coverage], ending now.
-  /// Set [includeGap] to leave a ~70min hole partway through — useful for
-  /// previewing DeviceScreen's gap-detection card.
+  /// Inserts one HR+accel sample per second across [coverage], ending at
+  /// [endAt] (defaults to now — pass an earlier time to simulate a session
+  /// that went quiet a while ago, for previewing Insights' "last real
+  /// reading" anchor instead of an ever-growing gap to the current
+  /// moment). Set [includeGap] to leave a ~70min hole partway through —
+  /// useful for previewing DeviceScreen's gap-detection card. Set
+  /// [zeroBpmNoiseRate] (0-1) to occasionally log a garbage bpm=0 reading,
+  /// the same sensor glitch Insights' "Lowest" stat now filters out.
   static Future<void> seed({
     required Duration coverage,
     bool includeGap = false,
+    DateTime? endAt,
+    double zeroBpmNoiseRate = 0,
   }) async {
     if (!kDebugMode) return;
 
-    // A stale cached report from a previous seed would otherwise keep
-    // showing on Home instead of reflecting this newly-seeded coverage.
-    await ReportService.debugClearCachedReport();
+    // A stale cached report, session-start anchor, or paused flag from a
+    // previous seed would otherwise keep showing on Home instead of
+    // reflecting this newly-seeded coverage.
+    await ReportService.debugResetSession();
 
     final db = DatabaseHelper.instance;
-    final now = DateTime.now();
-    final start = now.subtract(coverage);
+    final end = endAt ?? DateTime.now();
+    final start = end.subtract(coverage);
 
     var hrRows = <Map<String, dynamic>>[];
     var accelRows = <Map<String, dynamic>>[];
@@ -39,7 +47,7 @@ class DebugDataSeeder {
         : null;
     final gapEnd = gapStart?.add(const Duration(minutes: 70));
 
-    for (var t = start; t.isBefore(now); t = t.add(const Duration(seconds: 1))) {
+    for (var t = start; t.isBefore(end); t = t.add(const Duration(seconds: 1))) {
       if (gapStart != null && t.isAfter(gapStart) && t.isBefore(gapEnd!)) continue;
 
       final hourOfDay = t.hour + t.minute / 60.0;
@@ -47,11 +55,21 @@ class DebugDataSeeder {
       final circadian = -8 * cos((hourOfDay - 4) / 24 * 2 * pi);
       final isWaking = hourOfDay >= 7 && hourOfDay <= 22;
       final activity = isWaking ? _rand.nextDouble() : _rand.nextDouble() * 0.15;
-      final hr = (68 + circadian + activity * 20 + (_rand.nextDouble() - 0.5) * 6)
-          .clamp(48, 150)
-          .round();
-      final rr = (60000 / hr * (0.97 + _rand.nextDouble() * 0.06)).round();
-      // Occasional poor-contact dip, otherwise a healthy HRM confidence.
+      // A real sensor glitch reads as a flat zero regardless of the
+      // "real" heart rate underneath — not a low value, an absent one —
+      // so this branches before the normal hr calculation rather than
+      // nudging it down.
+      final isZeroNoise = zeroBpmNoiseRate > 0 && _rand.nextDouble() < zeroBpmNoiseRate;
+      final hr = isZeroNoise
+          ? 0
+          : (68 + circadian + activity * 20 + (_rand.nextDouble() - 0.5) * 6)
+              .clamp(48, 150)
+              .round();
+      final rr = (60000 / (hr == 0 ? 68 : hr) * (0.97 + _rand.nextDouble() * 0.06)).round();
+      // Occasional poor-contact dip, otherwise a healthy HRM confidence —
+      // deliberately not tied to isZeroNoise, since a real glitch reading
+      // doesn't reliably come with a confidence drop (see this method's
+      // doc comment).
       final confidence = (_rand.nextDouble() < 0.08)
           ? 30 + _rand.nextInt(30)
           : 80 + _rand.nextInt(19);
@@ -88,7 +106,7 @@ class DebugDataSeeder {
   static Future<void> clearAll() async {
     if (!kDebugMode) return;
     await DatabaseHelper.instance.debugClearAll();
-    await ReportService.debugClearCachedReport();
+    await ReportService.debugResetSession();
   }
 
   /// Undoes [seed] specifically — removes only the SIMULATED-WATCH rows it

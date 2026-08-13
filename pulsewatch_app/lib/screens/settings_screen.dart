@@ -175,7 +175,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       icon: Icons.pause_circle_outline,
       iconColor: AppColors.textSecondary,
       title: 'Stop recording?',
-      body: 'You can start a new recording anytime.',
+      body: 'Data collection stops right away, and nothing more will be '
+          "recorded until you start a new session. Make sure that's what you want.",
       primaryLabel: 'Stop recording',
       secondaryLabel: 'Keep recording',
     );
