@@ -181,6 +181,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (stopping) {
       await ReportService.setPaused(true);
       await BackgroundSyncService.instance.cancel();
+      // Cancelling the periodic task only stops future background syncs —
+      // a connection already held open (and its persistent "last reading
+      // Xm ago" notification) keeps running until something else drops it
+      // otherwise. See settings_screen.dart's _stopRecording for the same
+      // fix and BleService.disconnect's doc comment for why.
+      await BleService().disconnect();
     } else {
       await ReportService.startNewSession();
     }
