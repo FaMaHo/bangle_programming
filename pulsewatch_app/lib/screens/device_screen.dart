@@ -8,6 +8,7 @@ import '../services/ble_service.dart';
 import '../services/database_helper.dart';
 import '../services/sync_log_service.dart';
 import '../widgets/app_bottom_sheet.dart';
+import '../widgets/loading_state.dart';
 
 class DeviceScreen extends StatefulWidget {
   const DeviceScreen({super.key});
@@ -39,6 +40,12 @@ class _DeviceScreenState extends State<DeviceScreen> {
   List<ReadingGap> _recentGaps = [];
   static const _gapThreshold = Duration(minutes: 5);
   static const _gapLookback = Duration(hours: 6);
+
+  // Only gates the signal/data card's first load — the connection status
+  // card above it comes from BLE streams, not this DB query, so it stays
+  // visible throughout. Never reset back to true afterward: the periodic
+  // _statsTimer refreshes silently, same as Home.
+  bool _loading = true;
 
   @override
   void initState() {
@@ -88,6 +95,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
     );
     if (mounted) {
       setState(() {
+        _loading = false;
         _latestConfidence = confidence;
         _lastReadingTime = lastReading;
         _recentGaps = gaps;
@@ -569,7 +577,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
           const SizedBox(height: 16),
 
           // Live signal quality + last-reading/gap status.
-          _buildSignalAndDataCard(),
+          _loading
+              ? const LoadingState(message: 'Checking your watch data…')
+              : _buildSignalAndDataCard(),
           const SizedBox(height: 16),
 
           if (!isConnected && sortedDevices.isNotEmpty) ...[

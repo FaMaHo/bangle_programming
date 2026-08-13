@@ -58,6 +58,21 @@ def init_db():
                 FOREIGN KEY(used_by_user_id) REFERENCES users(id)
             )
         ''')
+        # Mirrors enrollment_codes, but for an *existing* account: no
+        # participant email/phone is ever collected (see users table above),
+        # so there's no channel to send a reset link to. A researcher who
+        # already vouches for identity at enrollment does the same job here
+        # — mints a one-time code the patient redeems in-app for a new
+        # password on their existing patient_id, instead of a new account.
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS password_reset_codes (
+                code TEXT PRIMARY KEY,
+                patient_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            )
+        ''')
 
 
 def generate_patient_id():
@@ -175,6 +190,96 @@ def verify_login(username, password):
         if row is None or not check_password_hash(row['password_hash'], password):
             return None
         return dict(row)
+
+
+def change_password(username, current_password, new_password):
+    """Self-service: the logged-in user proves they still know the old
+    password before setting a new one. Returns (True, None) on success, or
+    (False, error_message) on failure."""
+    username = (username or '').strip()
+    with _connect() as db:
+        row = db.execute(
+            'SELECT * FROM users WHERE username = ?', (username,)
+        ).fetchone()
+        if row is None or not check_password_hash(row['password_hash'], current_password):
+            return False, 'Current password is incorrect'
+
+        db.execute(
+            'UPDATE users SET password_hash = ? WHERE id = ?',
+            (generate_password_hash(new_password), row['id']),
+        )
+        return True, None
+
+
+def create_reset_code(patient_id, ttl_hours=72):
+    """Researcher-side: mint a one-time code that lets an existing patient
+    set a new password on their own account (see password_reset_codes'
+    table comment for why this exists instead of an emailed reset link).
+    Returns (code, None) on success, or (None, error_message) if the
+    patient_id doesn't match any account."""
+    with _connect() as db:
+        existing = db.execute(
+            'SELECT id FROM users WHERE patient_id = ?', (patient_id,)
+        ).fetchone()
+        if existing is None:
+            return None, 'No account found for that Research ID'
+
+        code = _generate_code()
+        now = _now()
+        expires = now + timedelta(hours=ttl_hours)
+        db.execute(
+            'INSERT INTO password_reset_codes (code, patient_id, created_at, expires_at) '
+            'VALUES (?, ?, ?, ?)',
+            (code, patient_id, now.isoformat(), expires.isoformat()),
+        )
+        return code, None
+
+
+def claim_reset_code(code, new_password):
+    """Patient-side: turn a valid, unused reset code into a new password on
+    their existing account. Returns (user_dict, None) on success, or
+    (None, error_message) on failure — same shape as claim_enrollment_code,
+    so the caller can hand the result straight to _tokens_for and log the
+    patient straight back in instead of making them log in again right
+    after proving who they are."""
+    code = (code or '').strip().upper()
+
+    with _connect() as db:
+        row = db.execute(
+            'SELECT * FROM password_reset_codes WHERE code = ?', (code,)
+        ).fetchone()
+
+        if row is None:
+            return None, 'Invalid reset code'
+        if row['used_at'] is not None:
+            return None, 'This code has already been used'
+        if datetime.fromisoformat(row['expires_at']) < _now():
+            return None, 'This code has expired — ask your researcher for a new one'
+
+        user_row = db.execute(
+            'SELECT * FROM users WHERE patient_id = ?', (row['patient_id'],)
+        ).fetchone()
+        if user_row is None:
+            return None, 'No account found for that code'
+
+        # Same race-safety approach as claim_enrollment_code: guard the
+        # write, not just the check above, so two concurrent redemptions of
+        # the same code can't both succeed.
+        claimed = db.execute(
+            'UPDATE password_reset_codes SET used_at = ? WHERE code = ? AND used_at IS NULL',
+            (_now().isoformat(), code),
+        )
+        if claimed.rowcount == 0:
+            return None, 'This code has already been used'
+
+        db.execute(
+            'UPDATE users SET password_hash = ? WHERE id = ?',
+            (generate_password_hash(new_password), user_row['id']),
+        )
+        user = db.execute(
+            'SELECT * FROM users WHERE id = ?', (user_row['id'],)
+        ).fetchone()
+        return dict(user), None
 
 
 def list_patients():

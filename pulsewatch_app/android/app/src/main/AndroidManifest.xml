@@ -116,4 +116,20 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+
+    <!-- Android 11+ hides other apps' package visibility by default —
+         without declaring these, url_launcher's canLaunchUrl/launchUrl can
+         silently fail to find a mail or browser app to hand mailto:/https:
+         links to, even when one is installed (Settings' contact-support,
+         withdrawal-request, and study-website links). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 </manifest>

@@ -96,6 +96,12 @@ def _tokens_for(user):
         'refresh_token': create_refresh_token(identity=user['username'], additional_claims=extra_claims),
         'patient_id': user['patient_id'],
         'role': user['role'],
+        # The app already knows its own username after /auth/login or
+        # /auth/claim (it just typed it into the form), but /auth/reset-password
+        # logs a patient in without them typing a username anywhere — this
+        # is the only way that flow can learn it, to store locally same as
+        # the other two.
+        'username': user['username'],
     }
 
 
@@ -319,6 +325,51 @@ def auth_refresh():
     return jsonify({'access_token': access_token}), 200
 
 
+@app.route('/auth/change-password', methods=['POST'])
+@jwt_required()
+@limiter.limit('10/minute')
+def auth_change_password():
+    """Self-service — the app already has a valid session; this just
+    proves the caller still knows the current password before changing it."""
+    data = request.get_json(silent=True) or {}
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not current_password or not new_password:
+        return jsonify({'error': 'current_password and new_password are required'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    ok, error = accounts.change_password(get_jwt_identity(), current_password, new_password)
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'success': True}), 200
+
+
+@app.route('/auth/reset-password', methods=['POST'])
+@limiter.limit('10/minute')
+def auth_reset_password():
+    """Redeems a researcher-issued reset code (see
+    /researcher/patient/<patient_id>/generate-reset-code) — the forgot-
+    password path for a patient who's locked out and can't prove identity
+    with a current password. Logs them straight back in on success, same
+    as /auth/claim does for a brand-new account."""
+    data = request.get_json(silent=True) or {}
+    code = data.get('code', '')
+    new_password = data.get('new_password', '')
+
+    if not code or not new_password:
+        return jsonify({'error': 'code and new_password are required'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    user, error = accounts.claim_reset_code(code, new_password)
+    if error:
+        return jsonify({'error': error}), 400
+
+    return jsonify(_tokens_for(user)), 200
+
+
 # ─── Website ─────────────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -429,7 +480,18 @@ def researcher_patient_detail(patient_id):
         patient=patient,
         sessions=sessions,
         deleted_message=deleted_message,
+        reset_code=request.args.get('reset_code'),
+        reset_error=request.args.get('reset_error'),
     )
+
+
+@app.route('/researcher/patient/<patient_id>/generate-reset-code', methods=['POST'])
+@researcher_web_required
+def researcher_generate_reset_code(patient_id):
+    code, error = accounts.create_reset_code(patient_id)
+    if error:
+        return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_error=error))
+    return redirect(url_for('researcher_patient_detail', patient_id=patient_id, reset_code=code))
 
 
 @app.route('/researcher/patient/<patient_id>/session/<session_id>/delete', methods=['POST'])

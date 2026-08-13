@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_bottom_sheet.dart';
+import '../widgets/loading_state.dart';
 
 enum _WearStatus { good, weak, gap }
 
@@ -254,6 +255,19 @@ class _InsightsScreenState extends State<InsightsScreen> {
     return '$startH $startAmPm–$endH $endAmPm';
   }
 
+  /// Time-of-day window for a run, e.g. "2–3 PM" — but hourCount can run
+  /// much longer than that suggests when start and end land at similar
+  /// clock times a day or more apart (a run that's actually 25 hours long
+  /// still has a start/end only an hour apart on the clock). Falls back to
+  /// spelling out both endpoints with their own day label whenever they
+  /// don't share a calendar day, instead of silently collapsing to a
+  /// window that implies a much shorter gap than actually happened.
+  String _formatWindow(DateTime start, DateTime end) {
+    final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
+    if (sameDay) return '${_formatHourRange(start, end)} ${_dayLabel(start)}';
+    return '${_formatHour(start)} ${_dayLabel(start)} – ${_formatHour(end)} ${_dayLabel(end)}';
+  }
+
   String _dayLabel(DateTime dt) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -280,8 +294,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     if (gapRuns.isNotEmpty) {
       final run = gapRuns.first;
       final duration = run.hourCount == 1 ? '1-hour' : '${run.hourCount}-hour';
-      final timeRange = _formatHourRange(run.startTime, run.endTime);
-      final day = _dayLabel(run.startTime);
+      final window = _formatWindow(run.startTime, run.endTime);
       final tip = run.overlapsSleepHours
           ? 'If it slipped off overnight, tightening the strap a notch before bed usually helps it stay snug.'
           : "If you took it off (shower, charging, workout), that's completely fine — just try to get it back on soon after so we don't miss too much.";
@@ -293,20 +306,19 @@ class _InsightsScreenState extends State<InsightsScreen> {
         iconColor: const Color(0xFF534AB7),
         bg: const Color(0xFFEEEDFE),
         textColor: const Color(0xFF26215C),
-        text: 'We noticed a $duration gap around $timeRange $day$extra. $tip',
+        text: 'We noticed a $duration gap around $window$extra. $tip',
       );
     }
 
     if (weakRuns.isNotEmpty) {
       final run = weakRuns.first;
-      final timeRange = _formatHourRange(run.startTime, run.endTime);
-      final day = _dayLabel(run.startTime);
+      final window = _formatWindow(run.startTime, run.endTime);
       return (
         icon: Icons.chat_bubble_outline_rounded,
         iconColor: const Color(0xFF534AB7),
         bg: const Color(0xFFEEEDFE),
         textColor: const Color(0xFF26215C),
-        text: 'Signal was a bit weak around $timeRange $day. A snugger fit — about a '
+        text: 'Signal was a bit weak around $window. A snugger fit — about a '
             "finger's width of slack — usually helps the sensor stay locked on.",
       );
     }
@@ -331,7 +343,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '$label • ${_formatHourRange(run.startTime, run.endTime)} ${_dayLabel(run.startTime)} • $duration',
+          '$label • ${_formatWindow(run.startTime, run.endTime)} • $duration',
         ),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -350,10 +362,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
           Text('Insights', style: Theme.of(context).textTheme.headlineLarge),
           const SizedBox(height: 24),
           if (_loading)
-            const Center(child: Padding(
-              padding: EdgeInsets.only(top: 60),
-              child: CircularProgressIndicator(color: AppColors.primaryGreen),
-            ))
+            const LoadingState(message: 'Crunching your heart rate data…')
           else if (_segments.isEmpty)
             _buildEmptyState()
           else ...[

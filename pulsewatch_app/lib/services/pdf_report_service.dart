@@ -114,7 +114,7 @@ class PdfReportService {
       child: pw.Text(
         _safe(
           'This is a research prototype, not a medical device. This report is designed to '
-          'support — not replace — clinical evaluation. A score above 25% should prompt a '
+          'support — not replace — clinical evaluation. A score above 30% should prompt a '
           'cardiologist referral. All analysis runs locally on your device. No data is sent anywhere.',
         ),
         style: pw.TextStyle(fontSize: 9.5, color: _textPrimary, lineSpacing: 2),

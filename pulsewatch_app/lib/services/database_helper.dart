@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -43,6 +45,59 @@ class DatabaseHelper {
       _database = null;
     }
     _activeUserId = patientId;
+
+    if (patientId != null && patientId.isNotEmpty) {
+      await _migrateUnscopedDataIfNeeded();
+    }
+  }
+
+  // Before this bug was fixed, background_sync_service.dart's periodic
+  // WorkManager isolate never set _activeUserId (a fresh isolate every run,
+  // no shared memory with the isolate that logged in), so every background
+  // sync silently fell back to _dbFileName()'s unscoped default and wrote
+  // real session data into a file the app never reads from — most of what
+  // a real 48h session recorded overnight/while backgrounded looked like
+  // missing wear time in Insights, when it had actually been captured.
+  // This recovers it once, ever, per device: copy anything sitting in that
+  // unscoped file into whichever patient is now active, skipping rows that
+  // already exist (same UNIQUE(timestamp, device_id) constraint that
+  // already guards against double-counting a synced-twice reading), then
+  // never touches the unscoped file again — nothing is deleted from it, so
+  // this is safe to run more than once if the guard flag is ever lost.
+  static const _kUnscopedMigrationDoneKey = 'unscoped_db_migrated_v1';
+
+  Future<void> _migrateUnscopedDataIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_kUnscopedMigrationDoneKey) ?? false) return;
+
+      final dbPath = await getDatabasesPath();
+      final unscopedPath = join(dbPath, 'pulsewatch.db');
+      if (!await File(unscopedPath).exists()) {
+        await prefs.setBool(_kUnscopedMigrationDoneKey, true);
+        return;
+      }
+
+      final db = await database;
+      await db.execute("ATTACH DATABASE '$unscopedPath' AS unscoped");
+      try {
+        await db.execute('''
+          INSERT OR IGNORE INTO heart_rate (timestamp, bpm, rr_interval_ms, confidence, device_id)
+          SELECT timestamp, bpm, rr_interval_ms, confidence, device_id FROM unscoped.heart_rate
+        ''');
+        await db.execute('''
+          INSERT OR IGNORE INTO accelerometer (timestamp, x, y, z, device_id)
+          SELECT timestamp, x, y, z, device_id FROM unscoped.accelerometer
+        ''');
+      } finally {
+        await db.execute('DETACH DATABASE unscoped');
+      }
+
+      await prefs.setBool(_kUnscopedMigrationDoneKey, true);
+    } catch (_) {
+      // Best-effort recovery of misfiled data — must never be able to
+      // block a normal login/cold-start over this.
+    }
   }
 
   Future<Database> _initDB(String filePath) async {
@@ -51,7 +106,7 @@ class DatabaseHelper {
 
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -118,7 +173,35 @@ class DatabaseHelper {
         'CREATE UNIQUE INDEX idx_accel_unique ON accelerometer(timestamp, device_id)',
       );
     }
+    if (oldVersion < 5) {
+      await db.execute(_kReportsTableSql);
+    }
   }
+
+  // Permanent archive of completed session reports — separate from
+  // ReportService's single "current session" cache slot, which only ever
+  // holds the most recently computed report and gets silently invalidated
+  // once its 48h window ages out relative to DateTime.now(). Saving a
+  // report here on "Save & start new session" (see ReportService) is what
+  // makes a finished session's result durable rather than a transient
+  // rolling-window snapshot.
+  static const _kReportsTableSql = '''
+      CREATE TABLE reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        computed_at INTEGER NOT NULL,
+        session_start INTEGER NOT NULL,
+        session_end INTEGER NOT NULL,
+        score REAL NOT NULL,
+        risk_level TEXT NOT NULL,
+        assessment TEXT NOT NULL,
+        agg_features TEXT NOT NULL,
+        n_windows INTEGER NOT NULL,
+        n_rows INTEGER NOT NULL,
+        duration_hours REAL NOT NULL,
+        mean_hr REAL NOT NULL,
+        mean_rmssd REAL NOT NULL
+      )
+    ''';
 
   Future<void> _createDB(Database db, int version) async {
     // Heart rate readings table
@@ -155,6 +238,8 @@ class DatabaseHelper {
         total_readings INTEGER DEFAULT 0
       )
     ''');
+
+    await db.execute(_kReportsTableSql);
 
     // Create indexes for faster queries
     await db.execute('CREATE INDEX idx_hr_timestamp ON heart_rate(timestamp)');
@@ -423,9 +508,15 @@ class DatabaseHelper {
     return csv.toString();
   }
   
-  Future<List<int>> getNocturnalHR() async {
+  // [reference] picks which night to look at — defaults to DateTime.now()
+  // for the Home screen's "last night" stat, which should always track the
+  // real calendar night; pass an explicit session-end timestamp instead
+  // when computing a session's own report (see HrvFeatureExtractor.
+  // computeNocturnal) so it finds that session's last night rather than
+  // whatever night happens to be current when the report is computed.
+  Future<List<int>> getNocturnalHR({DateTime? reference}) async {
     final db = await database;
-    final now = DateTime.now();
+    final now = reference ?? DateTime.now();
     final DateTime windowStart;
     final DateTime windowEnd;
     if (now.hour < 6) {
@@ -446,16 +537,18 @@ class DatabaseHelper {
     return result.map((r) => r['bpm'] as int).toList();
   }
 
-  Future<List<double>> getHourlyMeanHR(int hours) async {
+  // [before] anchors the trailing [hours]-wide window's upper edge — see
+  // getNocturnalHR's doc comment above for why computeNocturnal needs this
+  // instead of always trailing DateTime.now().
+  Future<List<double>> getHourlyMeanHR(int hours, {DateTime? before}) async {
     final db = await database;
-    final cutoff = DateTime.now()
-        .subtract(Duration(hours: hours))
-        .millisecondsSinceEpoch;
+    final end = before ?? DateTime.now();
+    final cutoff = end.subtract(Duration(hours: hours)).millisecondsSinceEpoch;
     final result = await db.rawQuery(
       'SELECT (timestamp / 3600000) AS hour_bucket, AVG(bpm) AS mean_bpm '
-      'FROM heart_rate WHERE timestamp >= ? '
+      'FROM heart_rate WHERE timestamp >= ? AND timestamp < ? '
       'GROUP BY hour_bucket ORDER BY hour_bucket ASC',
-      [cutoff],
+      [cutoff, end.millisecondsSinceEpoch],
     );
     return result.map((r) => (r['mean_bpm'] as num).toDouble()).toList();
   }
@@ -571,6 +664,17 @@ class DatabaseHelper {
     return ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
   }
 
+  // Used as the fallback session-start anchor for a user who already had
+  // data before ReportService's session-anchor concept existed — see
+  // ReportService.getSessionStart. Without this, upgrading the app mid
+  // session would reset an already-in-progress session's coverage to zero.
+  Future<DateTime?> getFirstReadingTime() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT MIN(timestamp) as first FROM heart_rate');
+    final ts = result.first['first'] as int?;
+    return ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
+  }
+
   // Most recent HRM confidence value (0-100-ish), for showing real signal
   // quality instead of a made-up score.
   Future<int> getLatestConfidence() async {
@@ -655,6 +759,41 @@ class DatabaseHelper {
     await db.close();
   }
 
+  // ── Report archive ─────────────────────────────────────────────────────
+  // Permanent record of completed sessions — see ReportService and the
+  // `reports` table's doc comment above for why this exists separately
+  // from the single-slot "current session" cache.
+
+  Future<int> insertReport(Map<String, dynamic> row) async {
+    final db = await database;
+    return await db.insert('reports', row);
+  }
+
+  Future<List<Map<String, dynamic>>> getReports() async {
+    final db = await database;
+    return await db.query('reports', orderBy: 'computed_at DESC');
+  }
+
+  // Opt-in cleanup for "Save & start new session" — removes only the raw
+  // samples belonging to the session just archived (its report has already
+  // been saved in full above), never anything from a session still in
+  // progress. [end] is exclusive, matching every other range query here.
+  Future<void> deleteReadingsBetween(DateTime start, DateTime end) async {
+    final db = await database;
+    final startMs = start.millisecondsSinceEpoch;
+    final endMs = end.millisecondsSinceEpoch;
+    await db.delete('heart_rate', where: 'timestamp >= ? AND timestamp < ?', whereArgs: [startMs, endMs]);
+    await db.delete('accelerometer', where: 'timestamp >= ? AND timestamp < ?', whereArgs: [startMs, endMs]);
+  }
+
+  // One-off maintenance helper — not a general per-row delete API, just
+  // enough to correct a bad archived entry (e.g. one saved before a report
+  // computation bug was fixed) without wiping raw readings too.
+  Future<void> deleteReport(int id) async {
+    final db = await database;
+    await db.delete('reports', where: 'id = ?', whereArgs: [id]);
+  }
+
   // ── DEBUG (preview builds only) ──────────────────────────────────────────
   // Bulk insert/clear used by lib/debug/debug_data_seeder.dart to populate a
   // realistic-looking session on the Android emulator, which has no real
@@ -684,6 +823,17 @@ class DatabaseHelper {
     await db.delete('heart_rate');
     await db.delete('accelerometer');
     await db.delete('sessions');
+  }
+
+  /// Removes only rows tagged with [deviceId] — for undoing a debug seed
+  /// (see DebugDataSeeder, which always tags synthetic rows as
+  /// 'SIMULATED-WATCH') without touching a real watch's rows, unlike
+  /// [debugClearAll] which wipes everything indiscriminately.
+  Future<void> debugClearDeviceId(String deviceId) async {
+    if (!kDebugMode) return;
+    final db = await database;
+    await db.delete('heart_rate', where: 'device_id = ?', whereArgs: [deviceId]);
+    await db.delete('accelerometer', where: 'device_id = ?', whereArgs: [deviceId]);
   }
 }
 

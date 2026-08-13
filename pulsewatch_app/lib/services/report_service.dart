@@ -185,11 +185,130 @@ class ReportService {
     await prefs.remove(await AuthService.instance.scopedKey(_prefsKey));
   }
 
-  /// Computes the final report from every sample in the last 48h of the
-  /// local DB. Returns null (and persists nothing) if there isn't enough
-  /// data to form a single valid window, so the caller can retry later.
-  static Future<FinalReport?> computeReport(DatabaseHelper db) async {
-    final cutoff = DateTime.now().subtract(collectionGoal).millisecondsSinceEpoch;
+  static const _sessionStartKey = 'session_start_v1';
+
+  /// Anchors "the current session" to a fixed point in time instead of an
+  /// endless rolling 48h-from-now window — without this, a completed
+  /// session's coverage silently drifts back down (and its report starts
+  /// looking "in progress" again) the moment more than 48h has passed since
+  /// it finished, purely because real time moved on, not because anything
+  /// about the data changed. Lazily initialized from the earliest reading
+  /// already in the DB the first time this is called, so upgrading the app
+  /// mid-session doesn't reset an already-in-progress session back to zero;
+  /// every call after that returns the same persisted value until
+  /// [startNewSession] moves it forward.
+  static Future<DateTime> getSessionStart(DatabaseHelper db) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = await AuthService.instance.scopedKey(_sessionStartKey);
+    final ms = prefs.getInt(key);
+    if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms);
+
+    final anchor = await db.getFirstReadingTime() ?? DateTime.now();
+    await prefs.setInt(key, anchor.millisecondsSinceEpoch);
+    return anchor;
+  }
+
+  /// Moves the session anchor to now — called after archiving the current
+  /// report (see [saveReportToHistory]) so the next session's coverage and
+  /// report computation start counting from a clean slate instead of
+  /// continuing to include the session that was just filed away.
+  static Future<void> startNewSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = await AuthService.instance.scopedKey(_sessionStartKey);
+    await prefs.setInt(key, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// Clears the "current session" cache slot without touching the archive
+  /// — the real-world counterpart to [debugClearCachedReport], used by
+  /// "Save & start new session" once the report it held has already been
+  /// written to permanent history.
+  static Future<void> clearCurrentReport() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(await AuthService.instance.scopedKey(_prefsKey));
+  }
+
+  static const _pausedKey = 'session_paused_v1';
+
+  /// True after "Save & stop for now" (see Home's save-session sheet) until
+  /// [setPaused] is called with false again by "Start a new recording".
+  /// Consulted anywhere that would otherwise silently reconnect to the
+  /// watch or nag about connectivity between sessions — see main.dart's
+  /// _maybeShowIssue gate and its tryAutoReconnect call sites, and
+  /// BackgroundSyncService.cancel()/ensureScheduled() for the periodic
+  /// background task itself.
+  static Future<bool> isPaused() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(await AuthService.instance.scopedKey(_pausedKey)) ?? false;
+  }
+
+  static Future<void> setPaused(bool paused) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(await AuthService.instance.scopedKey(_pausedKey), paused);
+  }
+
+  /// Permanently archives [report] into the `reports` table so it survives
+  /// independently of the single-slot cache above and of the rolling 48h
+  /// window computeReport itself uses — see DatabaseHelper's `reports`
+  /// table doc comment.
+  static Future<void> saveReportToHistory(
+    FinalReport report, {
+    required DateTime sessionStart,
+    required DateTime sessionEnd,
+  }) async {
+    await DatabaseHelper.instance.insertReport({
+      'computed_at': report.computedAt.millisecondsSinceEpoch,
+      'session_start': sessionStart.millisecondsSinceEpoch,
+      'session_end': sessionEnd.millisecondsSinceEpoch,
+      'score': report.score,
+      'risk_level': report.riskLevel,
+      'assessment': report.assessment,
+      'agg_features': jsonEncode(report.aggFeatures),
+      'n_windows': report.nWindows,
+      'n_rows': report.nRows,
+      'duration_hours': report.durationHours,
+      'mean_hr': report.meanHr,
+      'mean_rmssd': report.meanRmssd,
+    });
+  }
+
+  /// Every archived report, most recent first — backs the "Your reports"
+  /// list in Settings.
+  static Future<List<FinalReport>> getReportHistory() async {
+    final rows = await DatabaseHelper.instance.getReports();
+    return rows.map((r) {
+      return FinalReport(
+        score: (r['score'] as num).toDouble(),
+        riskLevel: r['risk_level'] as String,
+        assessment: r['assessment'] as String,
+        aggFeatures: (jsonDecode(r['agg_features'] as String) as Map<String, dynamic>)
+            .map((k, v) => MapEntry(k, (v as num).toDouble())),
+        nWindows: r['n_windows'] as int,
+        nRows: r['n_rows'] as int,
+        durationHours: (r['duration_hours'] as num).toDouble(),
+        meanHr: (r['mean_hr'] as num).toDouble(),
+        meanRmssd: (r['mean_rmssd'] as num).toDouble(),
+        computedAt: DateTime.fromMillisecondsSinceEpoch(r['computed_at'] as int),
+      );
+    }).toList();
+  }
+
+  /// Deletes the just-archived session's raw HR/accelerometer rows — the
+  /// opt-in half of "Save & start new session". Off by default: this is a
+  /// research dataset, not disposable app cache, so trading it away for
+  /// storage space is a deliberate per-session choice rather than something
+  /// that happens silently every time a report is saved.
+  static Future<void> deleteSessionRawData({
+    required DateTime sessionStart,
+    required DateTime sessionEnd,
+  }) async {
+    await DatabaseHelper.instance.deleteReadingsBetween(sessionStart, sessionEnd);
+  }
+
+  /// Computes the final report from every sample since [sessionStart].
+  /// Returns null (and persists nothing) if there isn't enough data to form
+  /// a single valid window, so the caller can retry later.
+  static Future<FinalReport?> computeReport(DatabaseHelper db, {required DateTime sessionStart}) async {
+    final cutoff = sessionStart.millisecondsSinceEpoch;
     final rows = await db.getHRWithAccelSince(cutoff);
     if (rows.isEmpty) return null;
 
@@ -204,9 +323,17 @@ class ReportService {
             ))
         .toList();
 
+    final sessionEnd = samples.last.time;
+
     // Session-level circadian/nocturnal features, applied to every window —
-    // these describe the whole recording, not a single 5-min slice.
-    final nocturnal = await HrvFeatureExtractor.computeNocturnal(db);
+    // these describe the whole recording, not a single 5-min slice. Anchored
+    // to this session's own last reading rather than DateTime.now(), so a
+    // report computed well after the session ended (e.g. re-derived from
+    // history, or delayed by the app not being opened) still finds the
+    // right night's data instead of silently falling back to generic
+    // training-set means because "today"/"last 24h" no longer overlaps
+    // anything this session actually recorded.
+    final nocturnal = await HrvFeatureExtractor.computeNocturnal(db, sessionEnd: sessionEnd);
 
     final windowFeats = <Map<String, double>>[];
     final windowProbs = <double>[];
@@ -214,7 +341,6 @@ class ReportService {
     // Two-pointer sliding window over timestamp-sorted samples.
     int lo = 0;
     DateTime windowStart = samples.first.time;
-    final sessionEnd = samples.last.time;
     while (windowStart.isBefore(sessionEnd)) {
       final windowEnd = windowStart.add(_windowDuration);
       while (lo < samples.length && samples[lo].time.isBefore(windowStart)) {
@@ -258,7 +384,7 @@ class ReportService {
 
     String riskLevel;
     String assessment;
-    if (sessionScore < 0.20) {
+    if (sessionScore < 0.30) {
       riskLevel = 'LOW';
       assessment = 'No significant cardiosclerosis markers detected. Readings are '
           'consistent with a healthy cardiovascular profile. Maintain regular '

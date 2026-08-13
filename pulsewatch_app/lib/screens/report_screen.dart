@@ -143,7 +143,7 @@ class _ReportScreenState extends State<ReportScreen> {
       child: const Text(
         '⚠ This is a research prototype, not a medical device. This report is '
         'designed to support — not replace — clinical evaluation. A score '
-        'above 25% should prompt a cardiologist referral. All analysis runs '
+        'above 30% should prompt a cardiologist referral. All analysis runs '
         'locally on your device. No data is sent anywhere.',
         style: TextStyle(color: AppColors.textPrimary, fontSize: 12.5, height: 1.5),
       ),

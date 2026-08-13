@@ -22,6 +22,7 @@ import 'services/server_service.dart';
 import 'services/ble_service.dart';
 import 'services/inference_service.dart';
 import 'services/notification_service.dart';
+import 'services/report_service.dart';
 import 'services/upload_consent_service.dart';
 import 'widgets/app_bottom_sheet.dart';
 import 'widgets/health_toast.dart';
@@ -298,7 +299,7 @@ class _MainNavigationState extends State<MainNavigation>
     // disconnected until the user noticed and manually reconnected.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _triggerAutoUpload();
-      BleService().tryAutoReconnect();
+      _tryAutoReconnectUnlessPaused();
       // Sequenced (see _runHealthPromptChecks' doc comment) rather than
       // fired alongside the first-run prompts below — covers "already
       // connected by the time this mounted" too (e.g. the foreground
@@ -444,7 +445,7 @@ class _MainNavigationState extends State<MainNavigation>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _triggerAutoUpload();
-      BleService().tryAutoReconnect(); // reconnect watch silently
+      _tryAutoReconnectUnlessPaused(); // reconnect watch silently, unless the user stopped recording
       _runHealthPromptChecks();
     }
   }
@@ -460,6 +461,16 @@ class _MainNavigationState extends State<MainNavigation>
   /// guarantees at most one is ever on screen. Shared by both the initial
   /// launch check and every resume, since the same collision risk exists
   /// on either.
+  /// Skips reconnecting while the user has stopped recording (see
+  /// ReportService.isPaused / HomeScreen's "Save & stop for now") — without
+  /// this, a cold start or every app resume would keep silently pulling the
+  /// watch back into an active link behind their back, undoing the whole
+  /// point of "stop everything until I explicitly start a new recording".
+  Future<void> _tryAutoReconnectUnlessPaused() async {
+    if (await ReportService.isPaused()) return;
+    await BleService().tryAutoReconnect();
+  }
+
   Future<void> _runHealthPromptChecks() async {
     await _maybeCheckUploadHealth();
     await _maybeShowBatteryExemptionPrompt();
@@ -589,8 +600,17 @@ class _MainNavigationState extends State<MainNavigation>
   /// user dismissed this same issue recently (see _toastCooldown) — the
   /// "don't spam" requirement, using the same SharedPreferences-cooldown
   /// approach already proven for the upload-health OS notifications.
+  ///
+  /// Every health toast (disconnect, Bluetooth off, battery exemption
+  /// revoked, no server connection) funnels through here, which makes this
+  /// the one place that needs to know about "stopped" (see
+  /// ReportService.isPaused) and about the user's notification preference
+  /// (see NotificationService.isEnabled, Settings' "Notifications" toggle)
+  /// instead of gating each call site individually.
   Future<void> _maybeShowIssue(HealthIssue issue) async {
     if (_activeIssue?.id == issue.id) return;
+    if (await ReportService.isPaused()) return;
+    if (!await NotificationService.isEnabled()) return;
 
     final prefs = await SharedPreferences.getInstance();
     final lastMs = prefs.getInt('toast_dismissed_${issue.id}_ms');

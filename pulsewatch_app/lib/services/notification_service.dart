@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_service.dart';
 
 class NotificationService {
   NotificationService._();
@@ -74,6 +75,23 @@ class NotificationService {
     await prefs.setBool(_kPermissionAsked, true);
   }
 
+  static const _kEnabledKey = 'notifications_enabled_v1';
+
+  /// Master on/off for every proactive notification this app sends — OS
+  /// notifications (below) and the in-app health toasts (main.dart's
+  /// _maybeShowIssue, which checks this too). Defaults on; the OS
+  /// permission prompt is a separate, one-time system gate (see
+  /// requestPermission above) that this doesn't replace.
+  static Future<bool> isEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(await AuthService.instance.scopedKey(_kEnabledKey)) ?? true;
+  }
+
+  static Future<void> setEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(await AuthService.instance.scopedKey(_kEnabledKey), enabled);
+  }
+
   /// Fires the actual OS permission dialog — call only after showing the
   /// user why (see main.dart's first-run prompts sequence).
   static Future<void> requestPermission() async {
@@ -84,6 +102,7 @@ class NotificationService {
   }
 
   static Future<void> sendRiskAlert(double score) async {
+    if (!await isEnabled()) return;
     if (score <= 0.87) return;
 
     final now = DateTime.now();
@@ -126,6 +145,7 @@ class NotificationService {
   /// the actual risk level or score — that can sit in a lock-screen
   /// notification preview where anyone glancing at the phone would see it.
   static Future<void> sendReportReadyAlert() async {
+    if (!await isEnabled()) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
         'risk_alerts',
@@ -146,6 +166,7 @@ class NotificationService {
   }
 
   static Future<void> sendConnectivityAlert() async {
+    if (!await isEnabled()) return;
     if (!await _alertCooldownElapsed('last_connectivity_alert_ms')) return;
     await _showUploadNotification(
       id: 3,
@@ -156,6 +177,7 @@ class NotificationService {
   }
 
   static Future<void> sendUploadBacklogAlert() async {
+    if (!await isEnabled()) return;
     if (!await _alertCooldownElapsed('last_backlog_alert_ms')) return;
     await _showUploadNotification(
       id: 4,
@@ -171,6 +193,7 @@ class NotificationService {
   /// why this can happen without the user ever touching the setting
   /// themselves.
   static Future<void> sendBatteryExemptionRevokedAlert() async {
+    if (!await isEnabled()) return;
     if (!await _alertCooldownElapsed('last_battery_revoked_alert_ms')) return;
     final details = NotificationDetails(
       android: AndroidNotificationDetails(

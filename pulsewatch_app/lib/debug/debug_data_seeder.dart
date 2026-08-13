@@ -90,4 +90,14 @@ class DebugDataSeeder {
     await DatabaseHelper.instance.debugClearAll();
     await ReportService.debugClearCachedReport();
   }
+
+  /// Undoes [seed] specifically — removes only the SIMULATED-WATCH rows it
+  /// inserted, leaving a real watch's rows (and its cached report, once
+  /// recomputed) untouched. Use this instead of [clearAll] whenever real
+  /// data may already be in the database.
+  static Future<void> clearSeeded() async {
+    if (!kDebugMode) return;
+    await DatabaseHelper.instance.debugClearDeviceId(_deviceId);
+    await ReportService.debugClearCachedReport();
+  }
 }

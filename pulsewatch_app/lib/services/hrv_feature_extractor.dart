@@ -159,20 +159,25 @@ class HrvFeatureExtractor {
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  /// Computes nocturnal HR features from the SQLite database.
+  /// Computes nocturnal HR features from the SQLite database, using the
+  /// night ending at/before [sessionEnd] rather than "today"/"the last 24h"
+  /// relative to DateTime.now() — a report computed some time after a
+  /// session actually ended (see ReportService.computeReport) still needs
+  /// that session's own last night, not whatever night is current when the
+  /// computation happens to run.
   /// Falls back to training-set means when insufficient data exists.
   /// Training means chosen so StandardScaler outputs 0 (neutral z-score).
-  static Future<Map<String, double>> computeNocturnal(DatabaseHelper db) async {
+  static Future<Map<String, double>> computeNocturnal(DatabaseHelper db, {required DateTime sessionEnd}) async {
     const kNoctMean   = 83.62;
     const kCircadian  = 60.57;
     const kFrag       = 0.051;
 
-    final noctBpms = await db.getNocturnalHR();
+    final noctBpms = await db.getNocturnalHR(reference: sessionEnd);
     final double noctMean = noctBpms.isNotEmpty
         ? noctBpms.reduce((a, b) => a + b) / noctBpms.length
         : kNoctMean;
 
-    final hourlyMeans = await db.getHourlyMeanHR(24);
+    final hourlyMeans = await db.getHourlyMeanHR(24, before: sessionEnd);
     final double circadian = hourlyMeans.length >= 6
         ? hourlyMeans.reduce(math.max) - hourlyMeans.reduce(math.min)
         : kCircadian;
