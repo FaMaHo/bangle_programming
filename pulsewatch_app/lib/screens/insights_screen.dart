@@ -89,6 +89,11 @@ class _InsightsScreenState extends State<InsightsScreen> {
   double _hrLowest = 0;
   double _hrTypical = 0;
   double _hrPeak = 0;
+  // Whether the window's right edge is recent enough to still call "Now" —
+  // see _loadImpl's isLive. When false, the trend card's trailing axis
+  // label shows the actual time of the last reading instead.
+  bool _isLive = true;
+  DateTime _windowEndTime = DateTime.now();
 
   @override
   void initState() {
@@ -108,20 +113,50 @@ class _InsightsScreenState extends State<InsightsScreen> {
   }
 
   Future<void> _loadImpl() async {
-    final samples = await _db.getHourlySamples(48);
+    // Anchored to the actual data — the last real reading — rather than
+    // ReportService's session-start bookkeeping (tried that; it broke the
+    // moment that marker moved for reasons unrelated to what data actually
+    // exists, e.g. tapping "Start a new recording", and Insights went
+    // blank despite days of real history sitting right there) or a rolling
+    // "now" (the original bug: once a session went quiet, the window kept
+    // stretching an ever-growing empty gap out to the current moment
+    // instead of ever settling). Ending the window at the last reading
+    // instead of "now" fixes both: a live session's last reading is always
+    // recent, so this reads as "now" in practice, while a session that's
+    // gone quiet just freezes right where the real data stopped.
+    final lastReading = await _db.getLastReadingTime();
+    if (lastReading == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final firstReading = await _db.getFirstReadingTime() ?? lastReading;
+    final now = DateTime.now();
+    final effectiveEnd = lastReading;
+    // "Live" only when the last reading is recent enough that this is
+    // plausibly still an active session — purely a label decision (see
+    // _buildTrendCard's trailing axis label), not part of the window math.
+    final isLive = now.difference(lastReading) < const Duration(minutes: 5);
+
+    final firstReadingHourBucket = firstReading.millisecondsSinceEpoch ~/ 3600000;
+    final endHourBucket = effectiveEnd.millisecondsSinceEpoch ~/ 3600000;
+    // Only shows the span that's actually elapsed since the first reading,
+    // capped at 48h — a blind "always 48h wide" scale would paint every
+    // hour before the watch was ever connected as a false "gap", and
+    // capping means a session that's been running for weeks still only
+    // ever shows its most recent 48h, exactly like the report itself.
+    final totalHours = (endHourBucket - firstReadingHourBucket + 1).clamp(1, 48);
+    final windowStartHourBucket = endHourBucket - totalHours + 1;
+
+    final samples = await _db.getHourlySamples(
+      48,
+      since: DateTime.fromMillisecondsSinceEpoch(windowStartHourBucket * 3600000),
+      before: effectiveEnd.add(const Duration(seconds: 1)),
+    );
 
     if (samples.isEmpty) {
       if (mounted) setState(() => _loading = false);
       return;
     }
-
-    final nowHourBucket = DateTime.now().millisecondsSinceEpoch ~/ 3600000;
-    final firstHourBucket = samples.first.hourBucket;
-    // Only shows the span that's actually elapsed since the first reading
-    // in this 48h window — a blind "always 48h wide" scale would paint
-    // every hour before the watch was ever connected as a false "gap".
-    final totalHours = (nowHourBucket - firstHourBucket + 1).clamp(1, 48);
-    final startHourBucket = nowHourBucket - totalHours + 1;
 
     // The HR chart samples at a finer resolution than the hourly wear
     // timeline below — enough points to look like a real curve even early
@@ -133,7 +168,12 @@ class _InsightsScreenState extends State<InsightsScreen> {
     // "worn". Cross-checking against these finer buckets catches that.
     const bucketMinutes = 30;
     const bucketMs = bucketMinutes * 60000;
-    final rangeSamples = await _db.getHrRangeSamples(48, bucketMinutes: bucketMinutes);
+    final rangeSamples = await _db.getHrRangeSamples(
+      48,
+      bucketMinutes: bucketMinutes,
+      since: DateTime.fromMillisecondsSinceEpoch(windowStartHourBucket * 3600000),
+      before: effectiveEnd.add(const Duration(seconds: 1)),
+    );
     final bucketsPerHour = 60 ~/ bucketMinutes;
     final coveredBucketsByHour = <int, int>{};
     for (final s in rangeSamples) {
@@ -145,7 +185,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     final byBucket = {for (final s in samples) s.hourBucket: s};
     final segments = <_HourSegment>[];
     for (var i = 0; i < totalHours; i++) {
-      final bucket = startHourBucket + i;
+      final bucket = windowStartHourBucket + i;
       final sample = byBucket[bucket];
       final hourStart = DateTime.fromMillisecondsSinceEpoch(bucket * 3600000);
       final fullyCovered = (coveredBucketsByHour[bucket] ?? 0) >= bucketsPerHour;
@@ -174,8 +214,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
         : (confidences.reduce((a, b) => a + b) / confidences.length).round();
 
     final totalBuckets = totalHours * bucketsPerHour;
-    final nowBucketIndex = DateTime.now().millisecondsSinceEpoch ~/ bucketMs;
-    final startBucketIndex = nowBucketIndex - totalBuckets + 1;
+    final endBucketIndex = effectiveEnd.millisecondsSinceEpoch ~/ bucketMs;
+    final startBucketIndex = endBucketIndex - totalBuckets + 1;
     final rangeByBucket = {
       for (final s in rangeSamples) s.bucketStart.millisecondsSinceEpoch ~/ bucketMs: s,
     };
@@ -215,6 +255,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
         _hrLowest = hrLowest;
         _hrTypical = hrTypical;
         _hrPeak = hrPeak;
+        _isLive = isLive;
+        _windowEndTime = effectiveEnd;
         _loading = false;
       });
     }
@@ -468,7 +510,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
               Text(_formatHour(first), style: TextStyle(fontSize: 10, color: AppColors.textSecondary.withOpacity(0.7))),
               if (_segments.length > 2)
                 Text(_formatHour(mid), style: TextStyle(fontSize: 10, color: AppColors.textSecondary.withOpacity(0.7))),
-              Text('Now', style: TextStyle(fontSize: 10, color: AppColors.textSecondary.withOpacity(0.7))),
+              Text(
+                _isLive ? 'Now' : _formatHour(_windowEndTime),
+                style: TextStyle(fontSize: 10, color: AppColors.textSecondary.withOpacity(0.7)),
+              ),
             ],
           ),
           const SizedBox(height: 14),

@@ -554,23 +554,30 @@ class DatabaseHelper {
   }
 
   /// Per-hour mean BPM and mean signal confidence for the last [hours]
-  /// hours — the Insights screen's wear-time timeline is built from this.
-  /// The trend chart itself uses getHrRangeSamples below at a finer
-  /// resolution; this stays hourly because "which hour had a gap or weak
-  /// signal" is the actual question the timeline answers. A missing hour
-  /// bucket (absent from the returned list) means literally nothing was
-  /// recorded that hour.
-  Future<List<HourlySample>> getHourlySamples(int hours) async {
+  /// hours (or, if [since]/[before] are given, that explicit window
+  /// instead — see the Insights screen, which anchors this to the actual
+  /// session start rather than a rolling "now" so the view stops growing
+  /// once the session's 48h is up) — the Insights screen's wear-time
+  /// timeline is built from this. The trend chart itself uses
+  /// getHrRangeSamples below at a finer resolution; this stays hourly
+  /// because "which hour had a gap or weak signal" is the actual question
+  /// the timeline answers. A missing hour bucket (absent from the returned
+  /// list) means literally nothing was recorded that hour.
+  ///
+  /// `bpm > 0` excludes the occasional garbage zero/negative reading the
+  /// sensor logs during a signal dropout — without it, one bad row could
+  /// drag an entire hour's mean toward zero even though every other
+  /// reading that hour was a real heartbeat.
+  Future<List<HourlySample>> getHourlySamples(int hours, {DateTime? since, DateTime? before}) async {
     final db = await database;
-    final cutoff = DateTime.now()
-        .subtract(Duration(hours: hours))
-        .millisecondsSinceEpoch;
+    final end = before ?? DateTime.now();
+    final cutoff = (since ?? end.subtract(Duration(hours: hours))).millisecondsSinceEpoch;
     final result = await db.rawQuery(
       'SELECT (timestamp / 3600000) AS hour_bucket, AVG(bpm) AS mean_bpm, '
       'AVG(confidence) AS mean_confidence, COUNT(*) AS n '
-      'FROM heart_rate WHERE timestamp >= ? '
+      'FROM heart_rate WHERE timestamp >= ? AND timestamp < ? AND bpm > 0 '
       'GROUP BY hour_bucket ORDER BY hour_bucket ASC',
-      [cutoff],
+      [cutoff, end.millisecondsSinceEpoch],
     );
     return result
         .map((r) => HourlySample(
@@ -583,24 +590,34 @@ class DatabaseHelper {
   }
 
   /// Mean/min/max BPM per [bucketMinutes]-wide bucket for the last [hours]
-  /// hours — the Insights trend chart's data source. Finer than
-  /// getHourlySamples (30 min vs 1 hour by default) so a session with only
-  /// a handful of hours still has enough points to look like a real curve,
-  /// and the min/max spread lets a brief spike or dip inside a bucket show
-  /// up as the band widening instead of being averaged away to a flat
-  /// line. A missing bucket means nothing was recorded in that window.
-  Future<List<HrRangeSample>> getHrRangeSamples(int hours, {int bucketMinutes = 30}) async {
+  /// hours, or an explicit [since]/[before] window — same reasoning as
+  /// [getHourlySamples] above. The Insights trend chart's data source.
+  /// Finer than getHourlySamples (30 min vs 1 hour by default) so a
+  /// session with only a handful of hours still has enough points to look
+  /// like a real curve, and the min/max spread lets a brief spike or dip
+  /// inside a bucket show up as the band widening instead of being
+  /// averaged away to a flat line. A missing bucket means nothing was
+  /// recorded in that window.
+  ///
+  /// `bpm > 0` excludes garbage zero/negative readings from a signal
+  /// dropout — without it, a single bad sample makes the whole session's
+  /// "Lowest" stat read as 0 bpm, which is never a real heart rate.
+  Future<List<HrRangeSample>> getHrRangeSamples(
+    int hours, {
+    int bucketMinutes = 30,
+    DateTime? since,
+    DateTime? before,
+  }) async {
     final db = await database;
     final bucketMs = bucketMinutes * 60000;
-    final cutoff = DateTime.now()
-        .subtract(Duration(hours: hours))
-        .millisecondsSinceEpoch;
+    final end = before ?? DateTime.now();
+    final cutoff = (since ?? end.subtract(Duration(hours: hours))).millisecondsSinceEpoch;
     final result = await db.rawQuery(
       'SELECT (timestamp / ?) AS bucket, AVG(bpm) AS mean_bpm, '
       'MIN(bpm) AS min_bpm, MAX(bpm) AS max_bpm, COUNT(*) AS n '
-      'FROM heart_rate WHERE timestamp >= ? '
+      'FROM heart_rate WHERE timestamp >= ? AND timestamp < ? AND bpm > 0 '
       'GROUP BY bucket ORDER BY bucket ASC',
-      [bucketMs, cutoff],
+      [bucketMs, cutoff, end.millisecondsSinceEpoch],
     );
     return result
         .map((r) => HrRangeSample(
