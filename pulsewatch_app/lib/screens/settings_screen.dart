@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/background_sync_service.dart';
 import '../services/biometric_lock_service.dart';
+import '../services/ble_service.dart';
 import '../services/notification_service.dart';
 import '../services/report_service.dart';
 import '../services/server_service.dart';
@@ -184,6 +185,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await ReportService.clearCurrentReport();
     await ReportService.setPaused(true);
     await BackgroundSyncService.instance.cancel();
+    // Cancelling the periodic background task above stops future syncs,
+    // but doesn't touch a connection already held open — without this, the
+    // watch link (and the persistent "last reading Xm ago" notification
+    // that comes with it — see BleService.disconnect's doc comment) just
+    // kept running until something else happened to drop it, which reads
+    // to the user as the app still monitoring after they'd asked it to
+    // stop.
+    await BleService().disconnect();
     if (mounted) {
       setState(() {
         _recordingBusy = false;
