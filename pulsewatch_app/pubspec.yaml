@@ -2,7 +2,7 @@ name: pulsewatch_app
 description: "PulseWatch AI - Medical Research System for Heart Sclerosis Detection"
 publish_to: 'none'
 
-version: 1.0.0+12
+version: 1.0.0+13
 
 environment:
   sdk: ^3.10.1
@@ -38,6 +38,14 @@ dependencies:
 
   # Opening mailto: (support/withdrawal requests) and the study website
   url_launcher: ^6.3.1
+
+  # Device manufacturer detection, for the OEM-specific "Autostart"
+  # background-permission prompt (see services/autostart_service.dart)
+  device_info_plus: ^12.4.0
+
+  # Launching the manufacturer-specific autostart settings screen — same
+  # purpose as above
+  android_intent_plus: ^6.1.0
 
   # PDF report generation (Cardiac Risk Report — proper paginated document,
   # not a screenshot, so OS print/save-as-PDF actually works correctly)
