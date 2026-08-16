@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/database_helper.dart';
+import '../services/sync_log_service.dart';
 import '../widgets/app_bottom_sheet.dart';
 import '../widgets/loading_state.dart';
 
@@ -95,6 +96,16 @@ class _InsightsScreenState extends State<InsightsScreen> {
   bool _isLive = true;
   DateTime _windowEndTime = DateTime.now();
 
+  // Set when _load's query chain throws — kept separate from the true
+  // "no data recorded yet" empty state (_segments.isEmpty with this null)
+  // since they need different copy: one says "start recording", the other
+  // says "something broke, here's what". Also logged, and shown on-screen —
+  // there's no debug panel to pull logs from on a release build, so a
+  // screenshot of this card is the only way a real failure gets reported
+  // back with enough detail to diagnose. See home_screen.dart's matching
+  // _loadError for the same reasoning.
+  String? _loadError;
+
   @override
   void initState() {
     super.initState();
@@ -104,11 +115,17 @@ class _InsightsScreenState extends State<InsightsScreen> {
   Future<void> _load() async {
     try {
       await _loadImpl();
-    } catch (_) {
-      // A failed query should show the empty state, not spin forever —
+    } catch (e) {
+      // A failed query should show a retry state, not spin forever —
       // whatever went wrong, the user should never be stuck looking at a
       // loading indicator with no way forward.
-      if (mounted) setState(() => _loading = false);
+      await SyncLogService.instance.record(
+        source: SyncSource.interactive,
+        success: false,
+        stage: 'insights_load',
+        message: e.toString(),
+      );
+      if (mounted) setState(() { _loading = false; _loadError = e.toString(); });
     }
   }
 
@@ -126,7 +143,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     // gone quiet just freezes right where the real data stopped.
     final lastReading = await _db.getLastReadingTime();
     if (lastReading == null) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() { _loading = false; _loadError = null; });
       return;
     }
     final firstReading = await _db.getFirstReadingTime() ?? lastReading;
@@ -154,7 +171,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
     );
 
     if (samples.isEmpty) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() { _loading = false; _loadError = null; });
       return;
     }
 
@@ -258,6 +275,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
         _isLive = isLive;
         _windowEndTime = effectiveEnd;
         _loading = false;
+        _loadError = null;
       });
     }
   }
@@ -405,6 +423,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
           const SizedBox(height: 24),
           if (_loading)
             const LoadingState(message: 'Crunching your heart rate data…')
+          else if (_loadError != null)
+            _buildErrorState()
           else if (_segments.isEmpty)
             _buildEmptyState()
           else ...[
@@ -448,6 +468,62 @@ class _InsightsScreenState extends State<InsightsScreen> {
             'Once you start recording, your heart rate trend and wear time will show up here.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // The error text itself is shown, not just a generic "something went
+  // wrong" — see home_screen.dart's matching card for why: there's no
+  // debug panel to pull logs from on a release build, so a screenshot is
+  // the only realistic way a real failure gets reported back with enough
+  // detail to diagnose.
+  Widget _buildErrorState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(color: AppColors.error.withOpacity(0.12), shape: BoxShape.circle),
+            child: const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 32),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            "Couldn't load your trends",
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Something went wrong reading your data. Try again — if it keeps '
+            'happening, use "Contact support" in Settings and include the '
+            'details below.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () {
+                setState(() => _loading = true);
+                _load();
+              },
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Try again'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SelectableText(
+            _loadError ?? '',
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary.withOpacity(0.8), fontFamily: 'monospace'),
           ),
         ],
       ),
