@@ -15,6 +15,7 @@ import 'screens/login_screen.dart';
 import 'screens/lock_screen.dart';
 import 'onboarding/coach_mark_overlay.dart';
 import 'services/auth_service.dart';
+import 'services/autostart_service.dart';
 import 'services/background_sync_service.dart';
 import 'services/biometric_lock_service.dart';
 import 'services/connection_status_service.dart';
@@ -275,6 +276,7 @@ class _MainNavigationState extends State<MainNavigation>
     _connectionSubscription = BleService().connectionStateStream.listen((state) {
       if (state == BluetoothConnectionState.connected) {
         _maybeShowBatteryExemptionPrompt();
+        _maybeShowAutostartPrompt();
         _clearIssue('watch_disconnected');
       } else if (state == BluetoothConnectionState.disconnected) {
         _maybeShowUnexpectedDisconnectToast();
@@ -474,6 +476,7 @@ class _MainNavigationState extends State<MainNavigation>
   Future<void> _runHealthPromptChecks() async {
     await _maybeCheckUploadHealth();
     await _maybeShowBatteryExemptionPrompt();
+    await _maybeShowAutostartPrompt();
     await _maybeShowBatteryRevokedToast();
   }
 
@@ -501,6 +504,35 @@ class _MainNavigationState extends State<MainNavigation>
       await BleService().requestBatteryExemption();
     }
     await BleService().markBatteryExemptionAsked();
+  }
+
+  /// Same purpose as the battery-exemption prompt above, for the separate
+  /// OEM "Autostart" permission some manufacturers (Xiaomi, Oppo, vivo,
+  /// Huawei, and others) layer on top of stock Android's — see
+  /// AutostartService's doc comment for why granting one doesn't grant the
+  /// other. No-op on every other phone: [needsAutostartPrompt] only
+  /// returns true on a manufacturer actually known to need this.
+  Future<void> _maybeShowAutostartPrompt() async {
+    if (!await AutostartService.instance.needsAutostartPrompt()) return;
+    if (!mounted) return;
+
+    final proceed = await showAppConfirmSheet(
+      context: context,
+      icon: Icons.phonelink_lock_rounded,
+      iconColor: AppColors.primaryGreen,
+      title: 'One more setting for reliable recording',
+      body: "Your phone's manufacturer adds its own background-app "
+          "permission on top of Android's — separate from the battery "
+          'setting. Turn it on for PulseWatch so recording keeps working '
+          "when the app isn't open.",
+      primaryLabel: 'Open settings',
+      secondaryLabel: 'Not now',
+    );
+
+    if (proceed == true) {
+      await AutostartService.instance.openSettings();
+    }
+    await AutostartService.instance.markAsked();
   }
 
   // ── Health toast (see widgets/health_toast.dart) ──────────────────────

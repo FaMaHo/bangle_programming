@@ -396,6 +396,10 @@ class DatabaseHelper {
   // equality join is O(n log m).
   Future<List<Map<String, dynamic>>> getHRWithAccelSince(int cutoffMillis) async {
     final db = await database;
+    // Bounded above too — this feeds computeReport's row-by-row
+    // DateTime.fromMillisecondsSinceEpoch conversion directly, so an
+    // implausible watch timestamp (see minValidTimestampMs's doc comment)
+    // would otherwise crash cardiac report generation itself.
     return await db.rawQuery('''
       SELECT h.timestamp, h.bpm,
              COALESCE(h.rr_interval_ms, 0) AS rr,
@@ -405,9 +409,9 @@ class DatabaseHelper {
       FROM heart_rate h
       LEFT JOIN accelerometer a
         ON a.timestamp = h.timestamp
-      WHERE h.timestamp >= ?
+      WHERE h.timestamp >= ? AND h.timestamp <= ?
       ORDER BY h.timestamp ASC
-    ''', [cutoffMillis]);
+    ''', [cutoffMillis, maxValidTimestampMs]);
   }
 
   // Get last N heart rate readings
@@ -674,9 +678,26 @@ class DatabaseHelper {
     return sum / rows.length;
   }
 
+  // A real reading's timestamp is always somewhere in this range — the
+  // watch's own firmware occasionally hands back a garbage value instead
+  // (an RTC that hadn't been set yet after a battery-dead reset is the
+  // leading suspect; see ble_service.dart's _processFileData, which is
+  // where this same range rejects a bad row before it's ever written).
+  // Without this bound here too, a bad row already sitting in an
+  // existing database from before that ingest-side fix existed — as one
+  // did on a real participant's phone — makes MAX(timestamp)/MIN(timestamp)
+  // return a value like 17861786878065918 (roughly the year 566000),
+  // which DateTime.fromMillisecondsSinceEpoch then throws a RangeError on,
+  // taking down every screen that calls this with it.
+  static final int minValidTimestampMs = DateTime.utc(2020).millisecondsSinceEpoch;
+  static final int maxValidTimestampMs = DateTime.utc(2100).millisecondsSinceEpoch;
+
   Future<DateTime?> getLastReadingTime() async {
     final db = await database;
-    final result = await db.rawQuery('SELECT MAX(timestamp) as last FROM heart_rate');
+    final result = await db.rawQuery(
+      'SELECT MAX(timestamp) as last FROM heart_rate WHERE timestamp BETWEEN ? AND ?',
+      [minValidTimestampMs, maxValidTimestampMs],
+    );
     final ts = result.first['last'] as int?;
     return ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
   }
@@ -687,7 +708,10 @@ class DatabaseHelper {
   // session would reset an already-in-progress session's coverage to zero.
   Future<DateTime?> getFirstReadingTime() async {
     final db = await database;
-    final result = await db.rawQuery('SELECT MIN(timestamp) as first FROM heart_rate');
+    final result = await db.rawQuery(
+      'SELECT MIN(timestamp) as first FROM heart_rate WHERE timestamp BETWEEN ? AND ?',
+      [minValidTimestampMs, maxValidTimestampMs],
+    );
     final ts = result.first['first'] as int?;
     return ts != null ? DateTime.fromMillisecondsSinceEpoch(ts) : null;
   }
@@ -737,11 +761,19 @@ class DatabaseHelper {
     int limit = 20,
   }) async {
     final db = await database;
+    // Always bounded above and below by a sane range, even when [since] is
+    // null — an implausible timestamp (see minValidTimestampMs/
+    // maxValidTimestampMs's doc comment) would otherwise sort first or
+    // last, get treated as a real reading, and
+    // DateTime.fromMillisecondsSinceEpoch below would throw on it.
+    final lowerBound = since != null
+        ? (since.millisecondsSinceEpoch > minValidTimestampMs ? since.millisecondsSinceEpoch : minValidTimestampMs)
+        : minValidTimestampMs;
     final rows = await db.query(
       'heart_rate',
       columns: ['timestamp'],
-      where: since != null ? 'timestamp >= ?' : null,
-      whereArgs: since != null ? [since.millisecondsSinceEpoch] : null,
+      where: 'timestamp >= ? AND timestamp <= ?',
+      whereArgs: [lowerBound, maxValidTimestampMs],
       orderBy: 'timestamp ASC',
     );
 

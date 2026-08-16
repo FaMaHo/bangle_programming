@@ -224,9 +224,9 @@ class ServerService {
       FROM heart_rate hr
       LEFT JOIN accelerometer a
         ON a.timestamp BETWEEN hr.timestamp - 500 AND hr.timestamp + 500
-      WHERE hr.timestamp > ?
+      WHERE hr.timestamp > ? AND hr.timestamp <= ?
       ORDER BY hr.timestamp ASC
-    ''', [cutoff]);
+    ''', [cutoff, DatabaseHelper.maxValidTimestampMs]);
 
     if (rows.isEmpty) {
       return ExportResult(csv: '', recordCount: 0, isEmpty: true);
