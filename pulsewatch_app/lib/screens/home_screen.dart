@@ -9,6 +9,7 @@ import '../services/ble_service.dart';
 import '../services/notification_service.dart';
 import '../services/report_service.dart';
 import '../services/server_service.dart';
+import '../services/sync_log_service.dart';
 import '../services/upload_consent_service.dart';
 import 'report_screen.dart';
 import '../widgets/loading_state.dart';
@@ -89,6 +90,15 @@ class _HomeScreenState extends State<HomeScreen> {
   // when nothing is being collected.
   bool _paused = false;
   bool _startingRecording = false;
+
+  // Set when _loadStats throws instead of completing — without this, a
+  // failed DB read left the screen stuck on "Loading your dashboard…"
+  // forever (see insights_screen.dart's _load, which already guarded
+  // against the same class of failure). Holding the raw exception text
+  // (not just a boolean) means a screenshot of this card is enough to
+  // diagnose a real report, since there's no debug panel on a release
+  // build to pull logs from.
+  String? _loadError;
 
   Timer? _statsTimer;
   Timer? _uploadHealthTimer;
@@ -230,6 +240,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadStats() async {
+    try {
+      await _loadStatsImpl();
+    } catch (e) {
+      // A failed query should show a retry state, not spin forever — the
+      // user should never be stuck looking at a loading indicator with no
+      // way forward. Logged too, in case a future adb pull becomes
+      // possible, but the on-screen text below is the primary channel:
+      // there's no debug panel to view this log from on a release build.
+      await SyncLogService.instance.record(
+        source: SyncSource.interactive,
+        success: false,
+        stage: 'dashboard_load',
+        message: e.toString(),
+      );
+      if (mounted) setState(() { _loading = false; _loadError = e.toString(); });
+    }
+  }
+
+  Future<void> _loadStatsImpl() async {
     // Checked first, independent of pause state below: the report-ready
     // auto-pause (see _maybeGenerateReport) means "paused" and "there's a
     // report waiting to be reviewed" can both be true at once, and the
@@ -252,6 +281,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _loading = false;
+          _loadError = null;
           _paused = true;
         });
       }
@@ -285,6 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) {
       setState(() {
         _loading = false;
+        _loadError = null;
         _paused = false;
         _coverageHours = coverageHours;
         _totalReadings = totalReadings;
@@ -497,6 +528,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMainSection() {
+    // State -1: the last load attempt threw — never leave the user staring
+    // at an infinite spinner. Takes priority over everything else since
+    // none of the other states have trustworthy data to show anyway.
+    if (_loadError != null) {
+      return _buildErrorCard();
+    }
+
     // State 1: report ready — compact summary + link to the full report.
     // Takes priority over the paused state below: data collection auto-
     // stops the moment the report finishes computing (see
@@ -519,6 +557,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // State 3: still collecting toward (or hasn't started) the 48h goal
     return _buildProgressHeroCard();
+  }
+
+  // The error text itself is shown, not just a generic "something went
+  // wrong" — on a release build there's no debug panel to pull logs from,
+  // so a screenshot of this card is the only way a real failure ever gets
+  // reported back to us with enough detail to actually diagnose it.
+  Widget _buildErrorCard() {
+    return _heroCardChrome(
+      leading: Container(
+        width: 64,
+        height: 64,
+        decoration: BoxDecoration(color: AppColors.error.withOpacity(0.12), shape: BoxShape.circle),
+        child: const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 32),
+      ),
+      title: "Couldn't load your dashboard",
+      caption: 'Something went wrong reading your data. Try again — if it '
+          'keeps happening, use "Contact support" in Settings and include '
+          'the details below.',
+      action: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () {
+                setState(() => _loading = true);
+                _loadStats();
+              },
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Try again'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SelectableText(
+            _loadError ?? '',
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary.withOpacity(0.8), fontFamily: 'monospace'),
+          ),
+        ],
+      ),
+    );
   }
 
   // Puts the actual Start action right here rather than only sending the
