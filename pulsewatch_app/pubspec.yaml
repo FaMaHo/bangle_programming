@@ -2,7 +2,7 @@ name: pulsewatch_app
 description: "PulseWatch AI - Medical Research System for Heart Sclerosis Detection"
 publish_to: 'none'
 
-version: 1.0.0+11
+version: 1.0.0+12
 
 environment:
   sdk: ^3.10.1
