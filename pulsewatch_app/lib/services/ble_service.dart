@@ -1264,6 +1264,21 @@ class BleService {
 
         if (parts.length >= 7) {
           int timestamp = int.parse(parts[0]);
+
+          // The watch's own RTC occasionally hands back a garbage value —
+          // seen in the wild as a timestamp ~566,000 years in the future,
+          // most likely from the clock not being set yet after a
+          // battery-dead reset. Writing that straight to the DB poisons
+          // every MAX(timestamp)/MIN(timestamp) query downstream — those
+          // return this row as "the" reading, and converting it back to a
+          // DateTime throws, which is what actually took down a real
+          // participant's dashboard. Reject it here instead of trusting
+          // untrusted external device input blindly.
+          if (timestamp < DatabaseHelper.minValidTimestampMs || timestamp > DatabaseHelper.maxValidTimestampMs) {
+            print("⚠️ Rejected row with implausible timestamp $timestamp: $line");
+            continue;
+          }
+
           int bpm = int.parse(parts[1]);
           int rrIntervalMs = int.parse(parts[2]);
           int confidence = int.parse(parts[3]);
