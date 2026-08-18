@@ -136,14 +136,21 @@ Runs on a DigitalOcean droplet at `188.166.228.82`, domain `pulsana.org`:
   auto-renewing
 - `SECRET_KEY` is set via a systemd `EnvironmentFile` (`.env` in this
   folder on the server, not in git)
-- Same `.env` also carries the contact-form → email credentials:
-  `CONTACT_SMTP_USERNAME` (a Gmail address) and `CONTACT_SMTP_PASSWORD`
-  (a Gmail **App Password**, not the account password — generate one
-  under Google Account → Security → App passwords, which requires
-  2-Step Verification to be on for that account). `CONTACT_EMAIL_TO`
-  defaults to `CONTACT_SMTP_USERNAME` if unset. Without these three set,
-  `/contact` still renders fine but POSTs fail with a friendly
-  "something went wrong, email us directly" message instead of crashing.
+- Same `.env` also carries the contact-form → email credentials. This
+  authenticates to Gmail via OAuth (XOAUTH2 over SMTP), not a password —
+  Google's recommended replacement for App Passwords:
+  `CONTACT_SMTP_USERNAME` (the Gmail address, e.g.
+  `pulsana.org.dev@gmail.com`), `GMAIL_OAUTH_CLIENT_ID`,
+  `GMAIL_OAUTH_CLIENT_SECRET`, and `GMAIL_OAUTH_REFRESH_TOKEN`. These
+  come from a **one-time local run** of
+  `pulsewatch_backend/get_gmail_refresh_token.py` on your own machine
+  (not the server) — see that file's docstring for the full Google Cloud
+  Console setup (create a project, enable the Gmail API, configure an
+  OAuth consent screen with the Gmail address as a test user, create a
+  Desktop-app OAuth client). `CONTACT_EMAIL_TO` defaults to
+  `CONTACT_SMTP_USERNAME` if unset. Without these set, `/contact` still
+  renders fine but POSTs fail with a friendly "something went wrong,
+  email us directly" message instead of crashing.
 
 To deploy a change: push to GitHub, then on the server:
 ```bash

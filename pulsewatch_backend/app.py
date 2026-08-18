@@ -17,6 +17,10 @@ import smtplib
 import sys
 import io
 import base64
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 import warnings
 from email.message import EmailMessage
 
@@ -60,16 +64,20 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # override with PUBLIC_SERVER_URL for local/dev testing (e.g. via the LAN IP).
 PUBLIC_SERVER_URL = os.environ.get('PUBLIC_SERVER_URL', 'https://pulsana.org')
 
-# Contact form → email relay. Credentials come from environment variables
-# (systemd EnvironmentFile in production, never in git — see ARCHITECTURE.md),
-# same pattern as SECRET_KEY below. CONTACT_SMTP_USERNAME is a Gmail address
-# with an App Password (not the account password) generated under Google
-# Account → Security → App passwords, since Gmail SMTP requires one.
+# Contact form → email relay, authenticated via Gmail OAuth (XOAUTH2 over
+# SMTP) rather than an App Password — Google's recommended replacement.
+# Credentials come from environment variables (systemd EnvironmentFile in
+# production, never in git — see ARCHITECTURE.md), same pattern as
+# SECRET_KEY below. The refresh token is minted once, locally, by running
+# get_gmail_refresh_token.py — see that file and ARCHITECTURE.md for setup.
 CONTACT_SMTP_HOST = os.environ.get('CONTACT_SMTP_HOST', 'smtp.gmail.com')
 CONTACT_SMTP_PORT = int(os.environ.get('CONTACT_SMTP_PORT', '587'))
 CONTACT_SMTP_USERNAME = os.environ.get('CONTACT_SMTP_USERNAME')
-CONTACT_SMTP_PASSWORD = os.environ.get('CONTACT_SMTP_PASSWORD')
 CONTACT_EMAIL_TO = os.environ.get('CONTACT_EMAIL_TO', CONTACT_SMTP_USERNAME)
+GMAIL_OAUTH_CLIENT_ID = os.environ.get('GMAIL_OAUTH_CLIENT_ID')
+GMAIL_OAUTH_CLIENT_SECRET = os.environ.get('GMAIL_OAUTH_CLIENT_SECRET')
+GMAIL_OAUTH_REFRESH_TOKEN = os.environ.get('GMAIL_OAUTH_REFRESH_TOKEN')
+GMAIL_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 # ─── Auth setup ──────────────────────────────────────────────────────────────
@@ -152,12 +160,43 @@ def _session_upload_date(session_path):
         return None
 
 
+def _get_gmail_access_token():
+    """Exchange the long-lived OAuth refresh token for a short-lived access
+    token. Plain stdlib HTTP call — no google-auth dependency needed just
+    for this. Returns None if unconfigured or the exchange fails."""
+    if not (GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET and GMAIL_OAUTH_REFRESH_TOKEN):
+        return None
+
+    data = urllib.parse.urlencode({
+        'client_id': GMAIL_OAUTH_CLIENT_ID,
+        'client_secret': GMAIL_OAUTH_CLIENT_SECRET,
+        'refresh_token': GMAIL_OAUTH_REFRESH_TOKEN,
+        'grant_type': 'refresh_token',
+    }).encode()
+
+    try:
+        req = urllib.request.Request(GMAIL_TOKEN_ENDPOINT, data=data)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())['access_token']
+    except (urllib.error.URLError, KeyError, ValueError) as e:
+        print(f'[contact] token refresh failed: {e}')
+        return None
+
+
 def _send_contact_email(name, sender_email, message_body):
-    """Relay a contact-form submission to the research team's inbox.
+    """Relay a contact-form submission to the research team's inbox via
+    Gmail, authenticated with OAuth (XOAUTH2) rather than a password.
     Returns True on success, False on any config/delivery failure (caller
     falls back to telling the visitor to email/WhatsApp directly)."""
-    if not CONTACT_SMTP_USERNAME or not CONTACT_SMTP_PASSWORD or not CONTACT_EMAIL_TO:
+    if not CONTACT_SMTP_USERNAME or not CONTACT_EMAIL_TO:
         return False
+
+    access_token = _get_gmail_access_token()
+    if not access_token:
+        return False
+
+    auth_string = f'user={CONTACT_SMTP_USERNAME}\x01auth=Bearer {access_token}\x01\x01'
+    auth_b64 = base64.b64encode(auth_string.encode()).decode()
 
     email_msg = EmailMessage()
     email_msg['Subject'] = f'Pulsana contact form — {name}'
@@ -169,7 +208,10 @@ def _send_contact_email(name, sender_email, message_body):
     try:
         with smtplib.SMTP(CONTACT_SMTP_HOST, CONTACT_SMTP_PORT, timeout=10) as smtp:
             smtp.starttls()
-            smtp.login(CONTACT_SMTP_USERNAME, CONTACT_SMTP_PASSWORD)
+            code, resp = smtp.docmd('AUTH', 'XOAUTH2 ' + auth_b64)
+            if code != 235:
+                print(f'[contact] XOAUTH2 auth failed: {code} {resp}')
+                return False
             smtp.send_message(email_msg)
         return True
     except (smtplib.SMTPException, OSError) as e:
