@@ -141,16 +141,31 @@ Runs on a DigitalOcean droplet at `188.166.228.82`, domain `pulsana.org`:
   Google's recommended replacement for App Passwords:
   `CONTACT_SMTP_USERNAME` (the Gmail address, e.g.
   `pulsana.org.dev@gmail.com`), `GMAIL_OAUTH_CLIENT_ID`,
-  `GMAIL_OAUTH_CLIENT_SECRET`, and `GMAIL_OAUTH_REFRESH_TOKEN`. These
-  come from a **one-time local run** of
-  `pulsewatch_backend/get_gmail_refresh_token.py` on your own machine
-  (not the server) — see that file's docstring for the full Google Cloud
-  Console setup (create a project, enable the Gmail API, configure an
-  OAuth consent screen with the Gmail address as a test user, create a
-  Desktop-app OAuth client). `CONTACT_EMAIL_TO` defaults to
-  `CONTACT_SMTP_USERNAME` if unset. Without these set, `/contact` still
-  renders fine but POSTs fail with a friendly "something went wrong,
-  email us directly" message instead of crashing.
+  `GMAIL_OAUTH_CLIENT_SECRET`, and `GMAIL_OAUTH_REFRESH_TOKEN`.
+  `CONTACT_EMAIL_TO` defaults to `CONTACT_SMTP_USERNAME` if unset.
+  Without these set, `/contact` still renders fine but POSTs fail with
+  a friendly "something went wrong, email us directly" message instead
+  of crashing.
+
+  **One-time setup for the OAuth credentials**, entirely on the server
+  (no local script — the human-approval step Google requires happens in
+  the researcher's own browser, redirected back to `pulsana.org`):
+  1. In [Google Cloud Console](https://console.cloud.google.com): create
+     a project, enable the **Gmail API**, configure the **OAuth consent
+     screen** (External, add `pulsana.org.dev@gmail.com` as a test user
+     — keeps it in Testing mode, no Google review needed), then create
+     an OAuth client ID of type **Web application** with authorized
+     redirect URI `https://pulsana.org/researcher/gmail-oauth/callback`.
+  2. Put the resulting `GMAIL_OAUTH_CLIENT_ID` and
+     `GMAIL_OAUTH_CLIENT_SECRET` (plus `CONTACT_SMTP_USERNAME`) in
+     `.env`, then `sudo systemctl restart pulsewatch-backend`.
+  3. Log into the researcher portal at `pulsana.org/researcher/login`,
+     then visit `pulsana.org/researcher/gmail-oauth/start` — it redirects
+     to Google, sign in as `pulsana.org.dev@gmail.com` and approve, and
+     Google redirects back to a page showing the `GMAIL_OAUTH_REFRESH_TOKEN`
+     line to add to `.env`.
+  4. Add that line, restart the service one more time, and send a real
+     test message through `/contact` to confirm delivery.
 
 To deploy a change: push to GitHub, then on the server:
 ```bash

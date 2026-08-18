@@ -4,6 +4,7 @@ from flask import (
     jsonify,
     Response,
     render_template,
+    render_template_string,
     session,
     redirect,
     url_for,
@@ -17,6 +18,7 @@ import smtplib
 import sys
 import io
 import base64
+import hashlib
 import json
 import urllib.error
 import urllib.parse
@@ -598,6 +600,104 @@ def researcher_login():
 def researcher_logout():
     session.clear()
     return redirect(url_for('researcher_login'))
+
+
+# ─── Gmail OAuth one-time setup ─────────────────────────────────────────────
+# Mints the refresh token _send_contact_email() needs, entirely on this
+# server — the human-approval step Google requires happens in the
+# researcher's own browser, redirected back to this same domain, rather
+# than via a script run on a local machine. Gated behind researcher login
+# since it's only ever used once (or again if the token is revoked).
+
+@app.route('/researcher/gmail-oauth/start')
+@researcher_web_required
+def gmail_oauth_start():
+    if not (GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET):
+        return (
+            'Set GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET in .env '
+            '(from the "Web application" OAuth client in Google Cloud '
+            'Console — see ARCHITECTURE.md), restart the service, then '
+            'reload this page.',
+            400,
+        )
+
+    state = secrets.token_urlsafe(16)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).decode().rstrip('=')
+    session['gmail_oauth_state'] = state
+    session['gmail_oauth_code_verifier'] = code_verifier
+
+    auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode({
+        'client_id': GMAIL_OAUTH_CLIENT_ID,
+        'redirect_uri': url_for('gmail_oauth_callback', _external=True),
+        'response_type': 'code',
+        'scope': 'https://www.googleapis.com/auth/gmail.send',
+        'access_type': 'offline',
+        'prompt': 'consent',
+        'state': state,
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256',
+    })
+    return redirect(auth_url)
+
+
+@app.route('/researcher/gmail-oauth/callback')
+@researcher_web_required
+def gmail_oauth_callback():
+    error = request.args.get('error')
+    if error:
+        return f'Google returned an error: {error}', 400
+
+    code = request.args.get('code')
+    state = request.args.get('state')
+    if not code or not state or state != session.get('gmail_oauth_state'):
+        return (
+            'Missing code, or the state didn\'t match (session may have '
+            'expired) — start over from /researcher/gmail-oauth/start.',
+            400,
+        )
+
+    code_verifier = session.pop('gmail_oauth_code_verifier', None)
+    session.pop('gmail_oauth_state', None)
+
+    data = urllib.parse.urlencode({
+        'code': code,
+        'client_id': GMAIL_OAUTH_CLIENT_ID,
+        'client_secret': GMAIL_OAUTH_CLIENT_SECRET,
+        'redirect_uri': url_for('gmail_oauth_callback', _external=True),
+        'grant_type': 'authorization_code',
+        'code_verifier': code_verifier,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(GMAIL_TOKEN_ENDPOINT, data=data)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            tokens = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return f'Token exchange failed: {e.read().decode()}', 400
+
+    refresh_token = tokens.get('refresh_token')
+    if not refresh_token:
+        return (
+            'No refresh token in the response — this usually means this '
+            'Gmail account already authorized this app before, so Google '
+            'skipped issuing a new one. Revoke access at '
+            'https://myaccount.google.com/permissions (find the app name), '
+            'then visit /researcher/gmail-oauth/start again.',
+            400,
+        )
+
+    return render_template_string(
+        '<pre style="font-family:monospace; white-space:pre-wrap; padding:24px; '
+        'max-width:640px; margin:40px auto; border:1px solid #ccc; border-radius:8px;">'
+        'Add this line to the server .env, then restart the service:\n\n'
+        'GMAIL_OAUTH_REFRESH_TOKEN={{ token }}\n\n'
+        '(GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET are already set '
+        'from getting here — leave them as they are.)</pre>',
+        token=refresh_token,
+    )
 
 
 def _patients_with_stats():
