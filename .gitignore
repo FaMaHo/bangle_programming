@@ -123,6 +123,7 @@ flutter_*.log
 credentials.json
 secrets.json
 config/secrets.yml
+client_secret*.json
 
 # User accounts DB (contains password hashes) - never commit
 pulsewatch_backend/users.db
