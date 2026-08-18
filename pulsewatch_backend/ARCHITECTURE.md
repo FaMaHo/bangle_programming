@@ -136,6 +136,14 @@ Runs on a DigitalOcean droplet at `188.166.228.82`, domain `pulsana.org`:
   auto-renewing
 - `SECRET_KEY` is set via a systemd `EnvironmentFile` (`.env` in this
   folder on the server, not in git)
+- Same `.env` also carries the contact-form → email credentials:
+  `CONTACT_SMTP_USERNAME` (a Gmail address) and `CONTACT_SMTP_PASSWORD`
+  (a Gmail **App Password**, not the account password — generate one
+  under Google Account → Security → App passwords, which requires
+  2-Step Verification to be on for that account). `CONTACT_EMAIL_TO`
+  defaults to `CONTACT_SMTP_USERNAME` if unset. Without these three set,
+  `/contact` still renders fine but POSTs fail with a friendly
+  "something went wrong, email us directly" message instead of crashing.
 
 To deploy a change: push to GitHub, then on the server:
 ```bash

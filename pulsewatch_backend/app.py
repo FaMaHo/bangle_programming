@@ -10,12 +10,15 @@ from flask import (
     send_from_directory,
 )
 import os
+import re
 import secrets
 import shutil
+import smtplib
 import sys
 import io
 import base64
 import warnings
+from email.message import EmailMessage
 
 # Windows' console defaults to cp1252, which can't encode the emoji used in
 # status prints below and crashes the request instead of just logging it.
@@ -56,6 +59,18 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Public base URL patients connect to. Defaults to the production domain;
 # override with PUBLIC_SERVER_URL for local/dev testing (e.g. via the LAN IP).
 PUBLIC_SERVER_URL = os.environ.get('PUBLIC_SERVER_URL', 'https://pulsana.org')
+
+# Contact form → email relay. Credentials come from environment variables
+# (systemd EnvironmentFile in production, never in git — see ARCHITECTURE.md),
+# same pattern as SECRET_KEY below. CONTACT_SMTP_USERNAME is a Gmail address
+# with an App Password (not the account password) generated under Google
+# Account → Security → App passwords, since Gmail SMTP requires one.
+CONTACT_SMTP_HOST = os.environ.get('CONTACT_SMTP_HOST', 'smtp.gmail.com')
+CONTACT_SMTP_PORT = int(os.environ.get('CONTACT_SMTP_PORT', '587'))
+CONTACT_SMTP_USERNAME = os.environ.get('CONTACT_SMTP_USERNAME')
+CONTACT_SMTP_PASSWORD = os.environ.get('CONTACT_SMTP_PASSWORD')
+CONTACT_EMAIL_TO = os.environ.get('CONTACT_EMAIL_TO', CONTACT_SMTP_USERNAME)
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 # ─── Auth setup ──────────────────────────────────────────────────────────────
 
@@ -135,6 +150,31 @@ def _session_upload_date(session_path):
         return datetime.fromtimestamp(min(mtimes)).strftime('%Y-%m-%d %H:%M')
     except OSError:
         return None
+
+
+def _send_contact_email(name, sender_email, message_body):
+    """Relay a contact-form submission to the research team's inbox.
+    Returns True on success, False on any config/delivery failure (caller
+    falls back to telling the visitor to email/WhatsApp directly)."""
+    if not CONTACT_SMTP_USERNAME or not CONTACT_SMTP_PASSWORD or not CONTACT_EMAIL_TO:
+        return False
+
+    email_msg = EmailMessage()
+    email_msg['Subject'] = f'Pulsana contact form — {name}'
+    email_msg['From'] = CONTACT_SMTP_USERNAME
+    email_msg['To'] = CONTACT_EMAIL_TO
+    email_msg['Reply-To'] = sender_email
+    email_msg.set_content(f'From: {name} <{sender_email}>\n\n{message_body}')
+
+    try:
+        with smtplib.SMTP(CONTACT_SMTP_HOST, CONTACT_SMTP_PORT, timeout=10) as smtp:
+            smtp.starttls()
+            smtp.login(CONTACT_SMTP_USERNAME, CONTACT_SMTP_PASSWORD)
+            smtp.send_message(email_msg)
+        return True
+    except (smtplib.SMTPException, OSError) as e:
+        print(f'[contact] failed to send: {e}')
+        return False
 
 
 def _patient_activity_summary(patient_id):
@@ -429,8 +469,34 @@ def faq_page():
     return render_template('faq.html', active_nav='faq')
 
 
-@app.route('/contact')
+@app.route('/contact', methods=['GET', 'POST'])
+@limiter.limit('5/hour')
 def contact_page():
+    if request.method == 'POST':
+        if request.form.get('company'):
+            # Honeypot — real visitors never see or fill this field, only bots.
+            return render_template('contact.html', active_nav='contact', contact_sent=True)
+
+        name = request.form.get('name', '').strip()
+        sender_email = request.form.get('email', '').strip()
+        message_body = request.form.get('message', '').strip()
+
+        if not name or not sender_email or not message_body:
+            return render_template('contact.html', active_nav='contact', contact_error='Please fill in every field before sending.')
+        if not _EMAIL_RE.match(sender_email):
+            return render_template('contact.html', active_nav='contact', contact_error='That email address doesn\'t look right — please double-check it.')
+        if len(message_body) > 5000:
+            return render_template('contact.html', active_nav='contact', contact_error='That message is a bit long — please keep it under 5000 characters.')
+
+        if not _send_contact_email(name, sender_email, message_body):
+            return render_template(
+                'contact.html',
+                active_nav='contact',
+                contact_error="Something went wrong sending that — please email us directly instead.",
+            )
+
+        return render_template('contact.html', active_nav='contact', contact_sent=True)
+
     return render_template('contact.html', active_nav='contact')
 
 

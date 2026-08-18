@@ -179,7 +179,9 @@ en: {
   contact_form_email: "Your email",
   contact_form_message: "How can we help?",
   contact_form_btn: "Send message",
-  contact_form_note: "This form is a front-end preview &mdash; it isn't wired up to send yet. For now, please use email or WhatsApp above.",
+  contact_form_note: "We're students running this ourselves, so please be patient if a reply takes a little while.",
+  contact_form_success: "Thanks &mdash; your message is on its way. We'll get back to you soon.",
+  contact_form_send_another: "Send another message",
 
   footer_tagline: "Built by Daria Gladkykh &amp; Fatemeh Sadat Mahmoudzadeh Hosseini, supervised by Prof. Dr. Ing. Nicolae Goga &mdash; FILS, POLITEHNICA Bucharest.",
   footer_disclaimer: "Pulsana / PulseWatch AI is a research screening tool, not a certified medical device, and does not provide medical diagnoses.",
@@ -366,7 +368,9 @@ ro: {
   contact_form_email: "Emailul tău",
   contact_form_message: "Cu ce te putem ajuta?",
   contact_form_btn: "Trimite mesajul",
-  contact_form_note: "Acest formular este o previzualizare front-end &mdash; nu este încă conectat pentru trimitere. Deocamdată, te rugăm să folosești emailul sau WhatsApp de mai sus.",
+  contact_form_note: "Suntem studenți care ne ocupăm singuri de acest studiu, așa că te rugăm să ai răbdare dacă răspunsul întârzie puțin.",
+  contact_form_success: "Mulțumim &mdash; mesajul tău este pe drum. Îți vom răspunde în curând.",
+  contact_form_send_another: "Trimite un alt mesaj",
 
   footer_tagline: "Realizat de Daria Gladkykh &amp; Fatemeh Sadat Mahmoudzadeh Hosseini, sub coordonarea Prof. Dr. Ing. Nicolae Goga &mdash; FILS, POLITEHNICA București.",
   footer_disclaimer: "Pulsana / PulseWatch AI este un instrument de screening pentru cercetare, nu un dispozitiv medical certificat, și nu oferă diagnostice medicale.",
@@ -553,7 +557,9 @@ zh: {
   contact_form_email: "你的邮箱",
   contact_form_message: "我们能为你做些什么？",
   contact_form_btn: "发送留言",
-  contact_form_note: "该表单目前仅为前端预览——尚未连接发送功能。现阶段请通过上方的邮箱或 WhatsApp 联系我们。",
+  contact_form_note: "我们是自行运营这项研究的学生，如果回复稍有延迟，请多多包涵。",
+  contact_form_success: "谢谢——你的留言已发送，我们会尽快回复你。",
+  contact_form_send_another: "再发一条留言",
 
   footer_tagline: "由 Daria Gladkykh 与 Fatemeh Sadat Mahmoudzadeh Hosseini 开发，指导教授：Nicolae Goga &mdash; 布加勒斯特理工大学外语工程学院（FILS）。",
   footer_disclaimer: "Pulsana / PulseWatch AI 是一项研究筛查工具，并非经认证的医疗器械，不提供医学诊断。",

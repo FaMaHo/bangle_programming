@@ -44,13 +44,25 @@
 
     <div class="card" style="margin-top:32px; max-width:560px; margin-left:auto; margin-right:auto;">
       <h2 style="margin-bottom:16px;" data-i18n="contact_form_h2">Or send us a message</h2>
-      <form class="simple-form" onsubmit="return false;">
-        <input type="text" data-i18n-attr="placeholder:contact_form_name" placeholder="Your name">
-        <input type="email" data-i18n-attr="placeholder:contact_form_email" placeholder="Your email">
-        <textarea data-i18n-attr="placeholder:contact_form_message" placeholder="How can we help?"></textarea>
+
+      {% if contact_sent %}
+      <div style="background:var(--sage-tint); border:1px solid #cfe2c6; border-radius:var(--radius-s); padding:16px 18px;">
+        <p style="margin:0; color:var(--sage-dark); font-weight:600;" data-i18n="contact_form_success">Thanks &mdash; your message is on its way. We'll get back to you soon.</p>
+      </div>
+      <a href="{{ url_for('contact_page') }}" class="btn btn-ghost" style="margin-top:16px;" data-i18n="contact_form_send_another">Send another message</a>
+      {% else %}
+      {% if contact_error %}
+      <div style="background:var(--coral-tint); border:1px solid #ecc2ca; color:#A14A3A; border-radius:var(--radius-s); padding:12px 14px; font-size:.88rem; margin-bottom:16px;">{{ contact_error }}</div>
+      {% endif %}
+      <form class="simple-form" method="POST">
+        <input type="text" name="company" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute; left:-9999px; width:1px; height:1px;">
+        <input type="text" name="name" required data-i18n-attr="placeholder:contact_form_name" placeholder="Your name">
+        <input type="email" name="email" required data-i18n-attr="placeholder:contact_form_email" placeholder="Your email">
+        <textarea name="message" required data-i18n-attr="placeholder:contact_form_message" placeholder="How can we help?"></textarea>
         <button type="submit" class="btn btn-primary" data-i18n="contact_form_btn">Send message</button>
-        <p class="form-note footer-fine" data-i18n="contact_form_note">This form is a front-end preview.</p>
+        <p class="form-note footer-fine" data-i18n="contact_form_note">We're students running this ourselves, so please be patient if a reply takes a little while.</p>
       </form>
+      {% endif %}
     </div>
   </div>
 </section>
