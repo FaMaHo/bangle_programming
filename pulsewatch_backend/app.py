@@ -14,7 +14,6 @@ import os
 import re
 import secrets
 import shutil
-import smtplib
 import sys
 import io
 import base64
@@ -66,20 +65,22 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # override with PUBLIC_SERVER_URL for local/dev testing (e.g. via the LAN IP).
 PUBLIC_SERVER_URL = os.environ.get('PUBLIC_SERVER_URL', 'https://pulsana.org')
 
-# Contact form → email relay, authenticated via Gmail OAuth (XOAUTH2 over
-# SMTP) rather than an App Password — Google's recommended replacement.
+# Contact form → email relay, sent via the Gmail REST API over HTTPS rather
+# than raw SMTP — cloud VPS providers (DigitalOcean included) commonly block
+# outbound SMTP ports (25/465/587) for anti-spam reasons, but not 443, and
+# the Gmail API needs nothing SMTP doesn't already need: same OAuth token,
+# same gmail.send scope, just a different transport for the last mile.
 # Credentials come from environment variables (systemd EnvironmentFile in
 # production, never in git — see ARCHITECTURE.md), same pattern as
-# SECRET_KEY below. The refresh token is minted once, locally, by running
-# get_gmail_refresh_token.py — see that file and ARCHITECTURE.md for setup.
-CONTACT_SMTP_HOST = os.environ.get('CONTACT_SMTP_HOST', 'smtp.gmail.com')
-CONTACT_SMTP_PORT = int(os.environ.get('CONTACT_SMTP_PORT', '587'))
+# SECRET_KEY below. The refresh token is minted once via the researcher
+# portal's /gmail-oauth/start flow — see ARCHITECTURE.md for setup.
 CONTACT_SMTP_USERNAME = os.environ.get('CONTACT_SMTP_USERNAME')
 CONTACT_EMAIL_TO = os.environ.get('CONTACT_EMAIL_TO', CONTACT_SMTP_USERNAME)
 GMAIL_OAUTH_CLIENT_ID = os.environ.get('GMAIL_OAUTH_CLIENT_ID')
 GMAIL_OAUTH_CLIENT_SECRET = os.environ.get('GMAIL_OAUTH_CLIENT_SECRET')
 GMAIL_OAUTH_REFRESH_TOKEN = os.environ.get('GMAIL_OAUTH_REFRESH_TOKEN')
 GMAIL_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
+GMAIL_SEND_ENDPOINT = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 # ─── Auth setup ──────────────────────────────────────────────────────────────
@@ -186,19 +187,17 @@ def _get_gmail_access_token():
 
 
 def _send_contact_email(name, sender_email, message_body):
-    """Relay a contact-form submission to the research team's inbox via
-    Gmail, authenticated with OAuth (XOAUTH2) rather than a password.
-    Returns True on success, False on any config/delivery failure (caller
-    falls back to telling the visitor to email/WhatsApp directly)."""
+    """Relay a contact-form submission to the research team's inbox via the
+    Gmail API over HTTPS — not raw SMTP, which is commonly blocked outbound
+    on cloud VPS providers. Returns True on success, False on any
+    config/delivery failure (caller falls back to telling the visitor to
+    email/WhatsApp directly)."""
     if not CONTACT_SMTP_USERNAME or not CONTACT_EMAIL_TO:
         return False
 
     access_token = _get_gmail_access_token()
     if not access_token:
         return False
-
-    auth_string = f'user={CONTACT_SMTP_USERNAME}\x01auth=Bearer {access_token}\x01\x01'
-    auth_b64 = base64.b64encode(auth_string.encode()).decode()
 
     email_msg = EmailMessage()
     email_msg['Subject'] = f'Pulsana contact form — {name}'
@@ -207,16 +206,26 @@ def _send_contact_email(name, sender_email, message_body):
     email_msg['Reply-To'] = sender_email
     email_msg.set_content(f'From: {name} <{sender_email}>\n\n{message_body}')
 
+    raw = base64.urlsafe_b64encode(email_msg.as_bytes()).decode()
+    payload = json.dumps({'raw': raw}).encode()
+
     try:
-        with smtplib.SMTP(CONTACT_SMTP_HOST, CONTACT_SMTP_PORT, timeout=10) as smtp:
-            smtp.starttls()
-            code, resp = smtp.docmd('AUTH', 'XOAUTH2 ' + auth_b64)
-            if code != 235:
-                print(f'[contact] XOAUTH2 auth failed: {code} {resp}')
-                return False
-            smtp.send_message(email_msg)
+        req = urllib.request.Request(
+            GMAIL_SEND_ENDPOINT,
+            data=payload,
+            headers={
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
         return True
-    except (smtplib.SMTPException, OSError) as e:
+    except urllib.error.HTTPError as e:
+        print(f'[contact] Gmail API rejected the send: {e.code} {e.read().decode()}')
+        return False
+    except (urllib.error.URLError, OSError) as e:
         print(f'[contact] failed to send: {e}')
         return False
 

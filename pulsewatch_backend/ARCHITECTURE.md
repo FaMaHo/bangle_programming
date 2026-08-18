@@ -137,15 +137,21 @@ Runs on a DigitalOcean droplet at `188.166.228.82`, domain `pulsana.org`:
 - `SECRET_KEY` is set via a systemd `EnvironmentFile` (`.env` in this
   folder on the server, not in git)
 - Same `.env` also carries the contact-form → email credentials. This
-  authenticates to Gmail via OAuth (XOAUTH2 over SMTP), not a password —
-  Google's recommended replacement for App Passwords:
-  `CONTACT_SMTP_USERNAME` (the Gmail address, e.g.
-  `pulsana.org.dev@gmail.com`), `GMAIL_OAUTH_CLIENT_ID`,
-  `GMAIL_OAUTH_CLIENT_SECRET`, and `GMAIL_OAUTH_REFRESH_TOKEN`.
-  `CONTACT_EMAIL_TO` defaults to `CONTACT_SMTP_USERNAME` if unset.
-  Without these set, `/contact` still renders fine but POSTs fail with
-  a friendly "something went wrong, email us directly" message instead
-  of crashing.
+  authenticates to Gmail via OAuth, not a password — Google's recommended
+  replacement for App Passwords — and sends via the **Gmail REST API over
+  HTTPS (port 443)**, not raw SMTP. That's a deliberate choice: this
+  droplet's outbound SMTP ports (465/587) are blocked (a common
+  DigitalOcean anti-spam restriction — traffic just times out, no error
+  from the droplet's own `ufw`), while 443 is already proven open since
+  the OAuth token refresh itself is an HTTPS call. Same OAuth token and
+  `gmail.send` scope work for both transports, so this needed no new
+  authorization. Env vars: `CONTACT_SMTP_USERNAME` (the Gmail address,
+  e.g. `pulsana.org.dev@gmail.com` — historical name, not actually SMTP
+  anymore), `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET`, and
+  `GMAIL_OAUTH_REFRESH_TOKEN`. `CONTACT_EMAIL_TO` defaults to
+  `CONTACT_SMTP_USERNAME` if unset. Without these set, `/contact` still
+  renders fine but POSTs fail with a friendly "something went wrong,
+  email us directly" message instead of crashing.
 
   **One-time setup for the OAuth credentials**, entirely on the server
   (no local script — the human-approval step Google requires happens in
