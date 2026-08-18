@@ -179,7 +179,6 @@ en: {
   contact_form_email: "Your email",
   contact_form_message: "How can we help?",
   contact_form_btn: "Send message",
-  contact_form_note: "We're students running this ourselves, so please be patient if a reply takes a little while.",
   contact_form_success: "Thanks &mdash; your message is on its way. We'll get back to you soon.",
   contact_form_send_another: "Send another message",
 
@@ -368,7 +367,6 @@ ro: {
   contact_form_email: "Emailul tău",
   contact_form_message: "Cu ce te putem ajuta?",
   contact_form_btn: "Trimite mesajul",
-  contact_form_note: "Suntem studenți care ne ocupăm singuri de acest studiu, așa că te rugăm să ai răbdare dacă răspunsul întârzie puțin.",
   contact_form_success: "Mulțumim &mdash; mesajul tău este pe drum. Îți vom răspunde în curând.",
   contact_form_send_another: "Trimite un alt mesaj",
 
@@ -557,7 +555,6 @@ zh: {
   contact_form_email: "你的邮箱",
   contact_form_message: "我们能为你做些什么？",
   contact_form_btn: "发送留言",
-  contact_form_note: "我们是自行运营这项研究的学生，如果回复稍有延迟，请多多包涵。",
   contact_form_success: "谢谢——你的留言已发送，我们会尽快回复你。",
   contact_form_send_another: "再发一条留言",
 
