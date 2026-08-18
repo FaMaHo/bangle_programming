@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Claude Code local (personal, per-machine) settings
+.claude/settings.local.json
+
 # Release APK build artifacts (too large for git; deployed manually to the server)
 *.apk
 pulsewatch_backend/static/downloads/
