@@ -471,6 +471,9 @@ def download_apk():
 @app.route('/researcher/login', methods=['GET', 'POST'])
 @limiter.limit('10/minute')
 def researcher_login():
+    if session.get('role') == 'researcher':
+        return redirect(url_for('researcher_dashboard'))
+
     if request.method == 'POST':
         user = accounts.verify_login(request.form.get('username', ''), request.form.get('password', ''))
         if not user or user['role'] != 'researcher':
