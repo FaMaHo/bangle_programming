@@ -61,7 +61,7 @@ en: {
   join_lead: "Joining takes three things: reading the short agreement below, getting your personal code, and installing the app. The next page walks you through setting up the bracelet itself.",
 
   join_consent_h2: "Study agreement",
-  join_consent_intro: "Before you get your code, please read this short summary. (Draft copy &mdash; to be replaced with the faculty's reviewed consent form before this page goes live.)",
+  join_consent_intro: "Before you get your code, please read this short summary.",
   join_consent_li1: "Participation is voluntary. You can stop wearing the bracelet and withdraw from the study at any time, for any reason.",
   join_consent_li2: "You'll be asked to wear the bracelet continuously for 48 hours, removing it only for showering or bathing.",
   join_consent_li3: "The bracelet records pulse (PPG) and movement data locally on your phone. Your readings are also sent securely to our research server to help the study &mdash; you can pause this any time in the app's privacy settings.",
@@ -248,7 +248,7 @@ ro: {
   join_lead: "Înscrierea presupune trei lucruri: citirea acordului de mai jos, obținerea codului tău personal și instalarea aplicației. Pagina următoare te ghidează prin configurarea brățării.",
 
   join_consent_h2: "Acordul studiului",
-  join_consent_intro: "Înainte de a primi codul, te rugăm să citești acest rezumat scurt. (Text preliminar &mdash; va fi înlocuit cu formularul de consimțământ verificat de facultate înainte de publicarea acestei pagini.)",
+  join_consent_intro: "Înainte de a primi codul, te rugăm să citești acest rezumat scurt.",
   join_consent_li1: "Participarea este voluntară. Poți renunța la purtarea brățării și te poți retrage din studiu oricând, indiferent de motiv.",
   join_consent_li2: "Ți se va cere să porți brățara continuu timp de 48 de ore, scoțând-o doar la duș sau baie.",
   join_consent_li3: "Brățara înregistrează local, pe telefonul tău, datele privind pulsul (PPG) și mișcarea. Înregistrările tale sunt trimise și în siguranță către serverul nostru de cercetare, pentru a ajuta studiul &mdash; poți opri acest lucru oricând din setările de confidențialitate ale aplicației.",
@@ -435,7 +435,7 @@ zh: {
   join_lead: "加入分为三步：阅读下方的简短协议、获取你的专属代码、安装应用。下一页会引导你完成手环本身的设置。",
 
   join_consent_h2: "研究协议",
-  join_consent_intro: "在获取代码之前，请先阅读这份简短说明。（草稿内容——在本页正式上线前，将替换为经学院审核的知情同意书。）",
+  join_consent_intro: "在获取代码之前，请先阅读这份简短说明。",
   join_consent_li1: "参与完全自愿。你可以随时停止佩戴手环并退出研究，无需说明原因。",
   join_consent_li2: "你需要连续佩戴手环 48 小时，仅在淋浴或洗澡时取下。",
   join_consent_li3: "手环会在你的手机本地记录脉搏（PPG）和运动数据。你的读数也会安全地发送到我们的研究服务器，以帮助这项研究——你可以随时在应用的隐私设置中暂停此功能。",
