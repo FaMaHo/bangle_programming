@@ -1,0 +1,58 @@
+{% extends "pulsana_base.html" %}
+{% block title %}Contact &mdash; Pulsana{% endblock %}
+{% block content %}
+
+<section class="hero" style="padding-bottom:20px;">
+  <div class="wrap" style="max-width:680px;">
+    <div class="eyebrow" data-i18n="contact_eyebrow">Get in touch</div>
+    <h1 data-i18n="contact_h1">We're happy to help</h1>
+    <p class="lead" data-i18n="contact_lead">Questions about joining, a stuck Bluetooth connection, or anything else.</p>
+  </div>
+</section>
+
+<section style="padding-top:8px;">
+  <div class="wrap" style="max-width:900px;">
+    <div class="contact-grid">
+      <div class="contact-card">
+        <div class="icon-badge" style="margin-bottom:12px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></div>
+        <div class="label" data-i18n="contact_email_label">Email</div>
+        <p class="value"><a href="mailto:pulsana.org.dev@gmail.com">pulsana.org.dev@gmail.com</a></p>
+      </div>
+
+      <div class="contact-card">
+        <div class="icon-badge coral" style="margin-bottom:12px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21 11.5a8.5 8.5 0 1 1-3.8-7.07L21 3l-1.2 4A8.46 8.46 0 0 1 21 11.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+        <div class="label" data-i18n="contact_whatsapp_label">WhatsApp</div>
+        <p class="value"><a href="https://wa.me/40791552205">+40 791 552 205</a></p>
+        <p class="value" style="margin-top:6px;"><a href="https://wa.me/40729192657">+40 729 192 657</a></p>
+      </div>
+
+      <div class="contact-card" style="grid-column:1 / -1;">
+        <div class="label" data-i18n="contact_wechat_label">WeChat</div>
+        <p style="font-size:.9rem; margin:6px 0 4px;" data-i18n="contact_wechat_note">Scan a code below to add us.</p>
+        <div class="qr-row">
+          <div class="qr-placeholder">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><rect x="14" y="3" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><rect x="3" y="14" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><path d="M14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z" fill="currentColor"/></svg>
+            WeChat QR &mdash; account 1
+          </div>
+          <div class="qr-placeholder">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><rect x="14" y="3" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><rect x="3" y="14" width="7" height="7" stroke="currentColor" stroke-width="1.4"/><path d="M14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z" fill="currentColor"/></svg>
+            WeChat QR &mdash; account 2
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:32px; max-width:560px; margin-left:auto; margin-right:auto;">
+      <h2 style="margin-bottom:16px;" data-i18n="contact_form_h2">Or send us a message</h2>
+      <form class="simple-form" onsubmit="return false;">
+        <input type="text" data-i18n-attr="placeholder:contact_form_name" placeholder="Your name">
+        <input type="email" data-i18n-attr="placeholder:contact_form_email" placeholder="Your email">
+        <textarea data-i18n-attr="placeholder:contact_form_message" placeholder="How can we help?"></textarea>
+        <button type="submit" class="btn btn-primary" data-i18n="contact_form_btn">Send message</button>
+        <p class="form-note footer-fine" data-i18n="contact_form_note">This form is a front-end preview.</p>
+      </form>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

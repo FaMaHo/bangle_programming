@@ -1,0 +1,66 @@
+{% extends "pulsana_base.html" %}
+{% block title %}FAQ &mdash; Pulsana{% endblock %}
+{% block content %}
+
+<section class="hero" style="padding-bottom:20px;">
+  <div class="wrap" style="max-width:680px;">
+    <div class="eyebrow" data-i18n="faq_eyebrow">Questions</div>
+    <h1 data-i18n="faq_h1">Frequently asked questions</h1>
+    <p class="lead" data-i18n="faq_lead">The ten questions we hear most from participants.</p>
+  </div>
+</section>
+
+<section style="padding-top:8px;">
+  <div class="wrap" style="max-width:680px;">
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q1">Question 1</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a1">Answer 1</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q2">Question 2</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a2">Answer 2</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q3">Question 3</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a3">Answer 3</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q4">Question 4</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a4">Answer 4</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q5">Question 5</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a5">Answer 5</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q6">Question 6</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a6">Answer 6</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q7">Question 7</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a7">Answer 7</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q8">Question 8</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a8">Answer 8</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q9">Question 9</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a9">Answer 9</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span data-i18n="faq_q10">Question 10</span><span class="plus">+</span></button>
+        <div class="faq-a"><p data-i18n="faq_a10">Answer 10</p></div>
+      </div>
+  </div>
+</section>
+
+<section class="section-alt">
+  <div class="wrap" style="text-align:center; max-width:560px;">
+    <h2 data-i18n="instr_footer_h2">Something not matching what you see?</h2>
+    <p data-i18n="contact_lead">Reach us through any of these.</p>
+    <a href="{{ url_for('contact_page') }}" class="btn btn-primary" data-i18n="instr_footer_btn2">Contact us</a>
+  </div>
+</section>
+
+{% endblock %}

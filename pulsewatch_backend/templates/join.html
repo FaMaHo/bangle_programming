@@ -1,0 +1,75 @@
+{% extends "pulsana_base.html" %}
+{% block title %}Join the study &mdash; Pulsana{% endblock %}
+{% block content %}
+
+<section class="hero" style="padding-bottom:20px;">
+  <div class="wrap" style="max-width:720px;">
+    <div class="eyebrow" data-i18n="join_eyebrow">Step 1 of 2</div>
+    <h1 data-i18n="join_h1">Join the study</h1>
+    <p class="lead" data-i18n="join_lead">Joining takes three things: reading the short agreement below, getting your personal code, and installing the app.</p>
+  </div>
+</section>
+
+<section style="padding-top:8px;">
+  <div class="wrap" style="max-width:720px;">
+    <div class="consent-box">
+      {% if not code %}
+      <h2 data-i18n="join_consent_h2">Study agreement</h2>
+      <p data-i18n="join_consent_intro">Before you get your code, please read this short summary.</p>
+      <ul class="consent-list">
+        <li data-i18n="join_consent_li1">Participation is voluntary.</li>
+        <li data-i18n="join_consent_li2">You'll be asked to wear the bracelet continuously for 48 hours.</li>
+        <li data-i18n="join_consent_li3">The bracelet records data locally.</li>
+        <li data-i18n="join_consent_li4">Any exported data is anonymized first.</li>
+        <li data-i18n="join_consent_li5">The report is a screening tool, not a diagnosis.</li>
+      </ul>
+
+      {% if error %}
+      <div class="error-box" style="background:rgba(232,165,152,0.15); border:1px solid rgba(232,165,152,0.5); color:#a13f2e; border-radius:12px; padding:12px 14px; font-size:.9rem; margin-bottom:16px;">{{ error }}</div>
+      {% endif %}
+
+      <form method="POST">
+        <div class="check-row">
+          <input type="checkbox" id="consent-check" name="agree">
+          <label for="consent-check" data-i18n="join_check_label">I have read the study agreement above and I consent to taking part.</label>
+        </div>
+
+        <button id="join-btn" class="btn btn-primary btn-block" disabled data-i18n="join_btn">Join the study and get an app</button>
+
+        <p class="disclaimer-note" data-i18n="join_consent_disclaimer">By checking the box above and continuing, you confirm you are a voluntary participant in this study and consent to anonymized data collection as described above.</p>
+      </form>
+      {% else %}
+      <div id="result-card" class="result-card show">
+        <h3 data-i18n="join_result_title">You're all set</h3>
+        <p data-i18n="join_result_body">Save this code &mdash; you'll need it once, the first time you open the app.</p>
+        <div class="code-display" id="enrollment-code">{{ code }}</div>
+        <p class="research-id">Research ID: {{ patient_id }} &middot; valid for 72 hours</p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:18px;">
+          <button id="copy-code-btn" class="btn btn-ghost" data-i18n="join_copy_btn">Copy code</button>
+          <a href="{{ url_for('download_apk') }}" class="btn btn-primary" data-i18n="join_download_btn">Download the Android app</a>
+        </div>
+        <p class="footer-fine" style="margin-top:14px;" data-i18n="join_ios_note">iOS support is coming soon.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="callout callout-note" style="margin-top:20px;">
+      <svg class="callout-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:var(--sage-dark);"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v.01M12 11v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <div>
+        <h4 data-i18n="join_account_note_title">About your account</h4>
+        <p data-i18n="join_account_note_body">You'll choose a username and password when you sign up. After your first login, your enrollment code isn't needed again.</p>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:28px; text-align:center;">
+      <h2 style="margin-bottom:6px;" data-i18n="join_next_h2">Next: set up your bracelet</h2>
+      <p data-i18n="join_next_body">Once the app is installed, head to the setup guide.</p>
+      <a href="{{ url_for('instructions_page') }}" class="btn btn-ghost" data-i18n="join_next_btn">Go to the setup guide</a>
+    </div>
+  </div>
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='pulsana/join.js') }}"></script>
+{% endblock %}

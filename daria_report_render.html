@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heart Sclerosis Risk Report — pw_session.csv</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #F0F4F0; color: #1B2D23; }
+  .header { background: #1A3A2A; color: white; padding: 28px 40px; }
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.3px; }
+  .header p  { font-size: 13px; color: #95D5B2; margin-top: 6px; }
+  .container { max-width: 900px; margin: 32px auto; padding: 0 24px; }
+  .gauge-section { background: white; border-radius: 12px; padding: 36px; text-align: center;
+                    box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  .score-number { font-size: 72px; font-weight: 800; line-height: 1; color: #E9963A; }
+  .score-label  { font-size: 18px; font-weight: 600; color: #E9963A; margin-top: 6px; text-transform: uppercase; letter-spacing: 1px; }
+  .risk-badge   { display: inline-block; background: #E9963A; color: white; border-radius: 20px;
+                   padding: 6px 20px; font-size: 14px; font-weight: 700; margin-top: 14px; }
+  .gauge-bar    { width: 80%; max-width: 500px; height: 18px; background: #E8F0EC; border-radius: 9px;
+                   margin: 20px auto 8px; overflow: hidden; }
+  .gauge-fill   { height: 100%; width: 24.3%; background: linear-gradient(90deg, #40916C, #E9963A); border-radius: 9px; }
+  .gauge-labels { display: flex; justify-content: space-between; width: 80%; max-width: 500px; margin: 0 auto;
+                   font-size: 11px; color: #8A9E94; }
+  .assessment   { background: #F7FAF8; border-left: 4px solid #E9963A; border-radius: 0 8px 8px 0;
+                   padding: 14px 18px; margin-top: 20px; text-align: left; font-size: 14px; line-height: 1.6; }
+  .section      { background: white; border-radius: 12px; padding: 28px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+                   margin-bottom: 24px; }
+  .section h2   { font-size: 16px; font-weight: 700; color: #1A3A2A; margin-bottom: 18px;
+                   padding-bottom: 10px; border-bottom: 2px solid #D8F3DC; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #1A3A2A; color: white; padding: 10px 14px; text-align: left; font-weight: 600; }
+  td { padding: 10px 14px; border-bottom: 1px solid #E8F0EC; }
+  tr:nth-child(even) td { background: #F7FAF8; }
+  .imp-bar { height: 10px; background: #40916C; border-radius: 5px; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meta-item { background: #F7FAF8; border-radius: 8px; padding: 12px 16px; }
+  .meta-item .label { font-size: 11px; color: #8A9E94; text-transform: uppercase; letter-spacing: 0.5px; }
+  .meta-item .value { font-size: 16px; font-weight: 700; color: #1A3A2A; margin-top: 2px; }
+  .disclaimer { background: #FFF8E3; border: 1px solid #E9963A; border-radius: 8px; padding: 14px 18px;
+                 font-size: 12px; color: #7A5C1A; line-height: 1.6; margin-bottom: 24px; }
+  .footer { text-align: center; font-size: 11px; color: #8A9E94; padding: 20px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Heart Sclerosis Risk Report</h1>
+  <p>AI Bracelet System &nbsp;·&nbsp; NUST Politehnica Bucharest &nbsp;·&nbsp; 2026-08-08 17:29</p>
+</div>
+<div class="container">
+
+  <div class="disclaimer">
+    ⚠ <strong>This is a research prototype, not a medical device.</strong>
+    This report is designed to support — not replace — clinical evaluation.
+    A score above 25% should prompt a cardiologist referral.
+    All analysis runs locally on your device. No data is sent anywhere.
+  </div>
+
+  <div class="gauge-section">
+    <div class="score-number">24.3%</div>
+    <div class="score-label">Cardiac Risk Score</div>
+    <div class="risk-badge">MEDIUM RISK</div>
+    <div class="gauge-bar"><div class="gauge-fill"></div></div>
+    <div class="gauge-labels"><span>0% — Healthy</span><span>50%</span><span>100% — High Risk</span></div>
+    <div class="assessment">Some autonomic markers associated with early cardiac stress detected. This score warrants clinical follow-up. Please consult a cardiologist for further evaluation.</div>
+  </div>
+
+  <div class="section">
+    <h2>Session Overview</h2>
+    <div class="meta-grid">
+      <div class="meta-item"><div class="label">File</div><div class="value">pw_session.csv</div></div>
+      <div class="meta-item"><div class="label">Windows analysed</div><div class="value">1152</div></div>
+      <div class="meta-item"><div class="label">Data rows</div><div class="value">172,758</div></div>
+      <div class="meta-item"><div class="label">Session duration</div><div class="value">~48.0 hours</div></div>
+      <div class="meta-item"><div class="label">Mean HR</div><div class="value">75 bpm</div></div>
+      <div class="meta-item"><div class="label">Mean RMSSD</div><div class="value">68.2 ms</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Top Influential Features</h2>
+    <table>
+      <tr><th>#</th><th>Feature</th><th>Value</th><th>Unit</th><th>Importance</th><th>Clinical meaning</th></tr>
+      <tr><td>1</td><td><strong>Sedentary Time</strong></td><td>0.000</td><td>%</td><td><div class="imp-bar" style="width:100%"></div></td><td style="color:#556B5E;font-size:12px">Fraction of time with minimal wrist movement.</td></tr>
+      <tr><td>2</td><td><strong>Accel. Entropy</strong></td><td>-4.573</td><td></td><td><div class="imp-bar" style="width:60%"></div></td><td style="color:#556B5E;font-size:12px">Randomness of movement patterns. Low = very sedentary lifestyle.</td></tr>
+      <tr><td>3</td><td><strong>Movement Variability</strong></td><td>0.060</td><td></td><td><div class="imp-bar" style="width:17%"></div></td><td style="color:#556B5E;font-size:12px">Variation in accelerometer signal across the session.</td></tr>
+      <tr><td>4</td><td><strong>Triangular Index</strong></td><td>12.860</td><td></td><td><div class="imp-bar" style="width:12%"></div></td><td style="color:#556B5E;font-size:12px">How peaked the RR histogram is. Low = rigid, fibrotic heartbeat pattern.</td></tr>
+      <tr><td>5</td><td><strong>Sleep Fragmentation</strong></td><td>0.000</td><td></td><td><div class="imp-bar" style="width:4%"></div></td><td style="color:#556B5E;font-size:12px">How often HR changes sharply during sleep. Elevated in cardiac autonomic dysfunction.</td></tr>
+      <tr><td>6</td><td><strong>Total HRV Power</strong></td><td>999.286</td><td>ms²</td><td><div class="imp-bar" style="width:4%"></div></td><td style="color:#556B5E;font-size:12px">Total variance in RR intervals across all frequency bands.</td></tr>
+      <tr><td>7</td><td><strong>Recovery Slope 1min</strong></td><td>0.000</td><td>bpm/s</td><td><div class="imp-bar" style="width:4%"></div></td><td style="color:#556B5E;font-size:12px">How fast HR drops in first minute after activity peak.</td></tr>
+      <tr><td>8</td><td><strong>LF Power</strong></td><td>281.282</td><td>ms²</td><td><div class="imp-bar" style="width:3%"></div></td><td style="color:#556B5E;font-size:12px">Low-frequency HRV band — reflects sympathetic nervous system activity. Elevated in cardiac fibrosis.</td></tr>
+    </table>
+  </div>
+
+  <div class="footer">
+    Generated by AI Bracelet for Early Detection of Heart Sclerosis &nbsp;·&nbsp;
+    Model: XGBoost (AUC 0.990, Accuracy 95.3%) &nbsp;·&nbsp;
+    Daria Gladkykh · FatemehSadat MahmoudzadehHosseini · Prof. Dr. Ing. Nicolae Goga
+  </div>
+</div>
+</body>
+</html>

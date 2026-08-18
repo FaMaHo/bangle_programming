@@ -21,12 +21,18 @@ class DebugDataSeeder {
   /// moment). Set [includeGap] to leave a ~70min hole partway through —
   /// useful for previewing DeviceScreen's gap-detection card. Set
   /// [zeroBpmNoiseRate] (0-1) to occasionally log a garbage bpm=0 reading,
-  /// the same sensor glitch Insights' "Lowest" stat now filters out.
+  /// the same sensor glitch Insights' "Lowest" stat now filters out. Set
+  /// [injectCorruptTimestamp] to append one row with an implausible
+  /// far-future timestamp (mirroring a real corrupted BLE-synced value seen
+  /// in the field) — for verifying the RangeError guard added to
+  /// DatabaseHelper/ServerService/BleService rejects/ignores it instead of
+  /// crashing Home/Insights.
   static Future<void> seed({
     required Duration coverage,
     bool includeGap = false,
     DateTime? endAt,
     double zeroBpmNoiseRate = 0,
+    bool injectCorruptTimestamp = false,
   }) async {
     if (!kDebugMode) return;
 
@@ -100,6 +106,26 @@ class DebugDataSeeder {
     }
     if (hrRows.isNotEmpty) {
       await db.debugBulkInsert(heartRateRows: hrRows, accelRows: accelRows);
+    }
+
+    if (injectCorruptTimestamp) {
+      // The literal value observed in the field: a corrupted BLE-synced
+      // reading landing ~566,000 years in the future, most likely from the
+      // watch RTC not being set after a battery-dead reset. Inserted raw
+      // (bypassing the normal per-second loop above) since it represents a
+      // single bad row arriving amid otherwise-normal data, not a pattern.
+      await db.debugBulkInsert(
+        heartRateRows: [
+          {
+            'timestamp': 17861786878065918,
+            'bpm': 72,
+            'rr_interval_ms': 833,
+            'confidence': 90,
+            'device_id': _deviceId,
+          },
+        ],
+        accelRows: const [],
+      );
     }
   }
 

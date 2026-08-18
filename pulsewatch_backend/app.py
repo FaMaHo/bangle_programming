@@ -374,24 +374,46 @@ def auth_reset_password():
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return render_template('index.html', active_nav='home')
 
 
-@app.route('/download', methods=['GET', 'POST'])
+@app.route('/instructions')
+def instructions_page():
+    return render_template('instructions.html', active_nav='instructions')
+
+
+@app.route('/faq')
+def faq_page():
+    return render_template('faq.html', active_nav='faq')
+
+
+@app.route('/contact')
+def contact_page():
+    return render_template('contact.html', active_nav='contact')
+
+
+@app.route('/join', methods=['GET', 'POST'])
 @limiter.limit('10/hour')
-def download_page():
+def join_page():
     """Patient-facing: agree to the consent/terms, then get a one-time
     enrollment code plus the app download link — self-service, replacing
     a researcher having to hand out codes individually."""
     if request.method == 'POST':
         agreed = request.form.get('agree') == 'on'
         if not agreed:
-            return render_template('download.html', error='Please confirm you agree before continuing.')
+            return render_template('join.html', active_nav='join', error='Please confirm you agree before continuing.')
 
         code, patient_id = accounts.create_enrollment_code()
-        return render_template('download.html', code=code, patient_id=patient_id)
+        return render_template('join.html', active_nav='join', code=code, patient_id=patient_id)
 
-    return render_template('download.html')
+    return render_template('join.html', active_nav='join')
+
+
+@app.route('/download')
+def download_page_redirect():
+    """Old address for the join flow — kept so existing links/bookmarks/QR
+    codes still resolve."""
+    return redirect(url_for('join_page'), code=301)
 
 
 @app.route('/download-apk')

@@ -177,6 +177,13 @@ class _DebugPanelState extends State<DebugPanel> {
                     ),
                   ),
                   _button(
+                    'Seed 6h + corrupt far-future timestamp',
+                    () => DebugDataSeeder.seed(
+                      coverage: const Duration(hours: 6),
+                      injectCorruptTimestamp: true,
+                    ),
+                  ),
+                  _button(
                     'Clear simulated data only',
                     () => DebugDataSeeder.clearSeeded(),
                   ),
