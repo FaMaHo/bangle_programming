@@ -15,9 +15,9 @@ en: {
   home_comp1_title: "The bracelet",
   home_comp1_body: "A Bangle.js 2 smartwatch, worn on the wrist. It quietly records your pulse (PPG) and movement every second, all day and all night, for up to 4 days on one charge.",
   home_comp2_title: "The PulseWatch AI app",
-  home_comp2_body: "Your phone pulls the readings off the bracelet over Bluetooth, encrypts them, and syncs them to our research server so your report can be generated. A privacy toggle in the app lets you turn syncing off any time.",
+  home_comp2_body: "Your phone pulls the readings off the bracelet over Bluetooth and turns them into your report right there on your phone.",
   home_comp3_title: "The AI analysis",
-  home_comp3_body: "An XGBoost model trained on over ten million heartbeats analyzes your encrypted data on our research server and turns it into a plain-language report.",
+  home_comp3_body: "An XGBoost model, trained on over ten million heartbeats, runs right on your phone and turns your recording into a plain-language report.",
 
   home_compare_eyebrow: "Why this matters",
   home_compare_h2: "Built for the years before a check-up would catch anything",
@@ -31,7 +31,7 @@ en: {
 
   home_privacy_eyebrow: "Data & privacy",
   home_privacy_h2: "Your heartbeat stays yours",
-  home_privacy_body: "Your readings sync from the bracelet to the app, then travel encrypted to our research server so your report can be generated. You're still in control: a privacy toggle in the app lets you pause that sync at any time (with a confirmation step, so it never happens by accident), and if no data has reached us for 6 hours, you'll get a gentle reminder notification.",
+  home_privacy_body: "Your report is generated right on your phone &mdash; no server needed for that. Your readings also help the study itself: the app shares them with our research server so we can keep improving the detection model, and a privacy toggle lets you pause that sharing anytime.",
 
   home_why_eyebrow: "Why join",
   home_why_h2: "What 48 hours gets you",
@@ -64,7 +64,7 @@ en: {
   join_consent_intro: "Before you get your code, please read this short summary. (Draft copy &mdash; to be replaced with the faculty's reviewed consent form before this page goes live.)",
   join_consent_li1: "Participation is voluntary. You can stop wearing the bracelet and withdraw from the study at any time, for any reason.",
   join_consent_li2: "You'll be asked to wear the bracelet continuously for 48 hours, removing it only for showering or bathing.",
-  join_consent_li3: "The bracelet records pulse (PPG) and movement data locally. Once you sync with the app, your readings are encrypted and sent to our research server &mdash; you can pause this any time in the app's privacy settings.",
+  join_consent_li3: "The bracelet records pulse (PPG) and movement data locally on your phone. Your readings are also sent securely to our research server to help the study &mdash; you can pause this any time in the app's privacy settings.",
   join_consent_li4: "Any data you choose to export or share with the research team is anonymized first &mdash; it carries no name, date of birth, or device identifier.",
   join_consent_li5: "The report you receive is a research screening tool, not a medical diagnosis. Please discuss any result with a doctor.",
   join_consent_disclaimer: "By checking the box below and continuing, you confirm you are a voluntary participant in this study and consent to anonymized data collection as described above.",
@@ -139,7 +139,7 @@ en: {
   faq_a1: "It's a research project from FILS, POLITEHNICA Bucharest, testing whether a wrist bracelet and an AI model can spot early signs of heart sclerosis (cardiosclerosis) from heart-rate variability and movement patterns, well before symptoms appear.",
 
   faq_q2: "Is any of my data sent to the cloud?",
-  faq_a2: "Yes &mdash; once the bracelet syncs to the app, your readings are encrypted and sent to our research server so your report can be generated. You're still in control: the app has a privacy setting to pause that sync, with a confirmation step so it never happens by accident. If syncing stays off for 6 hours, you'll get a reminder notification, since the study depends on that data reaching us.",
+  faq_a2: "Yes &mdash; though your report itself is generated right on your phone. Your readings are also sent to our research server so they can help improve the detection model for future participants. You're in control: the app has a privacy setting that lets you pause that sharing anytime.",
 
   faq_q3: "Is the Bangle.js 2 waterproof?",
   faq_a3: "No, it's not water-protected. Take it off before showering, bathing, or swimming, and put it back on as soon as you're done and dry.",
@@ -148,7 +148,7 @@ en: {
   faq_a4: "48 hours, as continuously as possible &mdash; including while you sleep. Short breaks for showering are fine; try to avoid taking it off for anything else, since gaps in the recording make the report less reliable.",
 
   faq_q5: "I forgot my password &mdash; what now?",
-  faq_a5: "Since you choose your own password when creating your account, we can't see or reset it for you. Email us at the address on the Contact page with the name and email you signed up with, and we'll help you get back in. Good to know: after your first sign-in, you won't need your original enrollment code again &mdash; just your username and password.",
+  faq_a5: "Since you choose your own password, we can't see or reset it for you. Contact us (see the Contact page) with your username, and we'll get you a fresh one-time code to set a new password.",
 
   faq_q6: "Can I use an iPhone?",
   faq_a6: "Not yet &mdash; the PulseWatch AI app currently supports Android only. iOS support is planned; if you'd like to be notified, let us know via the contact page.",
@@ -202,9 +202,9 @@ ro: {
   home_comp1_title: "Brățara",
   home_comp1_body: "Un smartwatch Bangle.js 2, purtat la încheietură. Înregistrează discret pulsul (PPG) și mișcarea în fiecare secundă, zi și noapte, până la 4 zile cu o singură încărcare.",
   home_comp2_title: "Aplicația PulseWatch AI",
-  home_comp2_body: "Telefonul tău preia înregistrările de pe brățară prin Bluetooth, le criptează și le sincronizează cu serverul nostru de cercetare, pentru a-ți genera raportul. Un comutator de confidențialitate din aplicație îți permite să oprești sincronizarea oricând.",
+  home_comp2_body: "Telefonul tău preia înregistrările de pe brățară prin Bluetooth și le transformă în raportul tău chiar acolo, pe telefon.",
   home_comp3_title: "Analiza AI",
-  home_comp3_body: "Un model XGBoost, antrenat pe peste zece milioane de bătăi ale inimii, analizează datele tale criptate pe serverul nostru de cercetare și le transformă într-un raport ușor de înțeles.",
+  home_comp3_body: "Un model XGBoost, antrenat pe peste zece milioane de bătăi ale inimii, rulează chiar pe telefonul tău și transformă înregistrarea într-un raport ușor de înțeles.",
 
   home_compare_eyebrow: "De ce contează asta",
   home_compare_h2: "Construit pentru anii dinaintea unui control care ar detecta ceva",
@@ -218,7 +218,7 @@ ro: {
 
   home_privacy_eyebrow: "Date și confidențialitate",
   home_privacy_h2: "Bătăile inimii tale rămân ale tale",
-  home_privacy_body: "Înregistrările tale se sincronizează de pe brățară în aplicație, apoi ajung criptate pe serverul nostru de cercetare, pentru a-ți putea genera raportul. Tu deții controlul: un comutator de confidențialitate din aplicație îți permite să oprești sincronizarea oricând (cu un pas de confirmare, ca să nu se întâmple din greșeală), iar dacă nu ajung date la noi timp de 6 ore, vei primi o notificare de reamintire.",
+  home_privacy_body: "Raportul tău este generat chiar pe telefonul tău &mdash; nu este nevoie de niciun server pentru asta. Înregistrările tale ajută și studiul în sine: aplicația le trimite către serverul nostru de cercetare, ca să putem îmbunătăți modelul de detecție, iar un comutator de confidențialitate îți permite să oprești această trimitere oricând.",
 
   home_why_eyebrow: "De ce să te înscrii",
   home_why_h2: "Ce primești în 48 de ore",
@@ -251,7 +251,7 @@ ro: {
   join_consent_intro: "Înainte de a primi codul, te rugăm să citești acest rezumat scurt. (Text preliminar &mdash; va fi înlocuit cu formularul de consimțământ verificat de facultate înainte de publicarea acestei pagini.)",
   join_consent_li1: "Participarea este voluntară. Poți renunța la purtarea brățării și te poți retrage din studiu oricând, indiferent de motiv.",
   join_consent_li2: "Ți se va cere să porți brățara continuu timp de 48 de ore, scoțând-o doar la duș sau baie.",
-  join_consent_li3: "Brățara înregistrează local datele privind pulsul (PPG) și mișcarea. Odată ce sincronizezi cu aplicația, înregistrările tale sunt criptate și trimise pe serverul nostru de cercetare &mdash; poți opri acest lucru oricând din setările de confidențialitate ale aplicației.",
+  join_consent_li3: "Brățara înregistrează local, pe telefonul tău, datele privind pulsul (PPG) și mișcarea. Înregistrările tale sunt trimise și în siguranță către serverul nostru de cercetare, pentru a ajuta studiul &mdash; poți opri acest lucru oricând din setările de confidențialitate ale aplicației.",
   join_consent_li4: "Orice date pe care alegi să le exporți sau să le partajezi cu echipa de cercetare sunt anonimizate în prealabil &mdash; nu conțin nume, dată de naștere sau identificator al dispozitivului.",
   join_consent_li5: "Raportul primit este un instrument de screening pentru cercetare, nu un diagnostic medical. Te rugăm să discuți orice rezultat cu un medic.",
   join_consent_disclaimer: "Bifând căsuța de mai jos și continuând, confirmi că participi voluntar la acest studiu și consimți la colectarea de date anonimizate, așa cum este descris mai sus.",
@@ -326,7 +326,7 @@ ro: {
   faq_a1: "Este un proiect de cercetare de la FILS, POLITEHNICA București, care testează dacă o brățară purtată la încheietură și un model de inteligență artificială pot depista semne timpurii de scleroză cardiacă din variabilitatea ritmului cardiac și tiparele de mișcare, cu mult înainte de apariția simptomelor.",
 
   faq_q2: "Datele mele ajung în cloud?",
-  faq_a2: "Da &mdash; odată ce brățara se sincronizează cu aplicația, înregistrările tale sunt criptate și trimise pe serverul nostru de cercetare pentru a-ți genera raportul. Tu deții în continuare controlul: aplicația are o setare de confidențialitate prin care poți opri sincronizarea, cu un pas de confirmare, ca să nu se întâmple din greșeală. Dacă sincronizarea rămâne oprită timp de 6 ore, vei primi o notificare de reamintire, deoarece studiul depinde de acele date.",
+  faq_a2: "Da &mdash; deși raportul tău este generat chiar pe telefon. Înregistrările tale sunt trimise și pe serverul nostru de cercetare, ca să ajute la îmbunătățirea modelului de detecție pentru viitorii participanți. Ai control: aplicația are o setare de confidențialitate care îți permite să oprești această trimitere oricând.",
 
   faq_q3: "Este Bangle.js 2 rezistent la apă?",
   faq_a3: "Nu, nu este protejat la apă. Scoate-o înainte de duș, baie sau înot și pune-o înapoi imediat ce ai terminat și ești uscat.",
@@ -335,7 +335,7 @@ ro: {
   faq_a4: "48 de ore, cât mai continuu posibil &mdash; inclusiv în timpul somnului. Pauzele scurte pentru duș sunt în regulă; evită să o scoți pentru altceva, deoarece întreruperile în înregistrare fac raportul mai puțin fiabil.",
 
   faq_q5: "Mi-am uitat parola &mdash; ce fac?",
-  faq_a5: "Deoarece tu îți alegi propria parolă la crearea contului, noi nu o putem vedea sau reseta pentru tine. Trimite-ne un email la adresa de pe pagina de Contact cu numele și emailul cu care te-ai înscris, iar noi te ajutăm să reintri. Bine de știut: după prima conectare, nu mai ai nevoie de codul inițial de înscriere &mdash; doar de numele de utilizator și parolă.",
+  faq_a5: "Deoarece tu îți alegi propria parolă, noi nu o putem vedea sau reseta pentru tine. Contactează-ne (vezi pagina de Contact) cu numele tău de utilizator, iar noi îți vom genera un cod nou, valabil o singură dată, ca să-ți setezi o parolă nouă.",
 
   faq_q6: "Pot folosi un iPhone?",
   faq_a6: "Nu încă &mdash; aplicația PulseWatch AI este momentan disponibilă doar pentru Android. Suportul pentru iOS este planificat; dacă vrei să fii anunțat, spune-ne pe pagina de contact.",
@@ -389,9 +389,9 @@ zh: {
   home_comp1_title: "手环",
   home_comp1_body: "一块佩戴在手腕上的 Bangle.js 2 智能手表。它每秒静默记录脉搏（PPG）和运动数据，昼夜不停，充满一次电可持续使用长达 4 天。",
   home_comp2_title: "PulseWatch AI 应用",
-  home_comp2_body: "手机通过蓝牙从手环读取数据，将其加密后同步到我们的研究服务器，以便生成你的报告。应用中的隐私开关可以让你随时关闭同步。",
+  home_comp2_body: "手机通过蓝牙从手环读取数据，并直接在手机上生成你的报告。",
   home_comp3_title: "AI 分析",
-  home_comp3_body: "一个在超过一千万次心跳数据上训练的 XGBoost 模型，会在我们的研究服务器上分析你的加密数据，并将其转化为通俗易懂的报告。",
+  home_comp3_body: "一个在超过一千万次心跳数据上训练的 XGBoost 模型，会直接在你的手机上运行，将你的记录转化为通俗易懂的报告。",
 
   home_compare_eyebrow: "为什么这很重要",
   home_compare_h2: "为体检还查不出问题的那几年而设计",
@@ -405,7 +405,7 @@ zh: {
 
   home_privacy_eyebrow: "数据与隐私",
   home_privacy_h2: "你的心跳数据仍然属于你",
-  home_privacy_body: "你的读数会从手环同步到应用，随后以加密方式发送到我们的研究服务器，以便生成你的报告。你仍然拥有掌控权：应用中的隐私开关可以让你随时暂停同步（并会先请你确认，以免误操作），如果连续 6 小时没有数据到达我们这里，你会收到一条提醒通知。",
+  home_privacy_body: "你的报告是直接在手机上生成的——不需要服务器。你的读数同时也在帮助这项研究本身：应用会把它们分享给我们的研究服务器，以便我们不断改进检测模型；隐私开关可以让你随时暂停这种分享。",
 
   home_why_eyebrow: "为什么加入",
   home_why_h2: "48 小时能为你带来什么",
@@ -438,7 +438,7 @@ zh: {
   join_consent_intro: "在获取代码之前，请先阅读这份简短说明。（草稿内容——在本页正式上线前，将替换为经学院审核的知情同意书。）",
   join_consent_li1: "参与完全自愿。你可以随时停止佩戴手环并退出研究，无需说明原因。",
   join_consent_li2: "你需要连续佩戴手环 48 小时，仅在淋浴或洗澡时取下。",
-  join_consent_li3: "手环在本地记录脉搏（PPG）和运动数据。一旦你与应用同步，读数会被加密并发送到我们的研究服务器——你可以随时在应用的隐私设置中暂停此功能。",
+  join_consent_li3: "手环会在你的手机本地记录脉搏（PPG）和运动数据。你的读数也会安全地发送到我们的研究服务器，以帮助这项研究——你可以随时在应用的隐私设置中暂停此功能。",
   join_consent_li4: "你选择导出或与研究团队分享的任何数据，都会先经过匿名化处理——不包含姓名、出生日期或设备标识。",
   join_consent_li5: "你收到的报告是一项研究筛查工具，并非医学诊断。请就任何结果咨询医生。",
   join_consent_disclaimer: "勾选下方复选框并继续，即表示你确认自愿参与本研究，并同意按上述说明收集匿名化数据。",
@@ -513,7 +513,7 @@ zh: {
   faq_a1: "这是布加勒斯特理工大学外语工程学院（FILS）的一项研究项目，测试手腕手环与人工智能模型能否通过心率变异性和运动模式，在症状出现之前很久就发现心脏硬化的早期迹象。",
 
   faq_q2: "我的数据会上传到云端吗？",
-  faq_a2: "会的——一旦手环与应用同步，你的读数会被加密并发送到我们的研究服务器，以生成你的报告。你仍然拥有控制权：应用中有一个隐私设置可以暂停同步，并会先请你确认，以免误操作。如果同步关闭超过 6 小时，你会收到一条提醒通知，因为这项研究依赖这些数据。",
+  faq_a2: "会的——不过你的报告本身是直接在手机上生成的。你的读数也会发送到我们的研究服务器，以帮助改进未来参与者使用的检测模型。你可以自行控制：应用中的隐私设置可以让你随时暂停这种分享。",
 
   faq_q3: "Bangle.js 2 防水吗？",
   faq_a3: "不防水。淋浴、洗澡或游泳前请取下，结束并擦干后再重新佩戴。",
@@ -522,7 +522,7 @@ zh: {
   faq_a4: "48 小时，尽量连续佩戴——包括睡觉时间。短暂取下淋浴是可以的；请尽量避免因其他原因取下，因为记录中断会降低报告的可靠性。",
 
   faq_q5: "我忘记了密码，该怎么办？",
-  faq_a5: "由于密码是你在创建账户时自行设置的，我们无法查看或替你重置。请发送邮件至联系页面上的地址，注明你注册时使用的姓名和邮箱，我们会帮你找回账户。提示：首次登录之后，你就不再需要最初的注册代码了——只需使用用户名和密码即可。",
+  faq_a5: "由于密码是你自己设置的，我们无法查看或替你重置。请通过联系页面上的方式联系我们，并提供你的用户名，我们会给你一个新的一次性代码，用来设置新密码。",
 
   faq_q6: "我可以用 iPhone 吗？",
   faq_a6: "暂时不可以——PulseWatch AI 应用目前仅支持安卓系统。iOS 版本已在计划中，如果你希望收到上线通知，请在联系页面告诉我们。",
