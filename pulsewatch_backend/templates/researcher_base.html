@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Researcher portal &mdash; Pulsana{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='pulsana/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='pulsana/admin.css') }}">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a href="{{ url_for('home') }}" class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="9" fill="#6E9A5E"/><path d="M5 17h4l2.4-6 3.4 12 3-9 1.8 3H27" stroke="#F5F1E6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Pulsana
+    </a>
+    <span class="eyebrow" style="margin:0;">Researcher portal</span>
+    <div class="nav-right">
+      {% if session.get('username') %}
+      <span class="muted" style="font-size:.85rem; color:var(--ink-soft);">{{ session.get('username') }}</span>
+      <a href="{{ url_for('researcher_logout') }}" class="btn btn-ghost" style="padding:9px 18px;">Log out</a>
+      {% endif %}
+    </div>
+  </nav>
+</header>
+
+<main class="admin-main">
+  <div class="wrap">
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+<footer>
+  <div class="wrap" style="text-align:center;">
+    <p class="footer-fine">Pulsana research portal &middot; <a href="{{ url_for('home') }}" style="color:inherit;">Back to the public site</a></p>
+  </div>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

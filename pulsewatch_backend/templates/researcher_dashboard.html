@@ -1,72 +1,159 @@
-{% extends "base.html" %}
-{% block title %}Dashboard — PulseWatch AI{% endblock %}
+{% extends "researcher_base.html" %}
+{% block title %}Patients &mdash; Pulsana researcher portal{% endblock %}
 {% block content %}
-<div class="card wide">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
-    <div>
-      <h1 style="margin-bottom:2px;">Patients</h1>
-      <p class="muted">Logged in as {{ username }}</p>
-    </div>
-    <a class="button secondary" style="width:auto; padding:10px 18px;" href="{{ url_for('researcher_logout') }}">Log out</a>
+
+<div class="admin-header-row">
+  <div>
+    <div class="eyebrow">Researcher portal</div>
+    <h1 style="font-size:2rem;">Patients</h1>
   </div>
+</div>
 
-  {% if new_code %}
-  <div class="success-box">
-    <p style="font-weight:700; color: var(--text-primary); margin-bottom: 8px;">New enrollment code generated</p>
-    <div class="code-display">{{ new_code }}</div>
-    <p class="muted" style="text-align:center;">Research ID: {{ new_patient_id }} · valid for 72 hours</p>
+{% if new_code %}
+<div class="consent-box" style="margin-bottom:24px; padding:24px;">
+  <p style="font-weight:600; color:var(--ink); margin-bottom:4px;">New enrollment code generated</p>
+  <p style="font-size:.85rem; margin-bottom:0;">Give this to the patient, or have them enter it in the app.</p>
+  <div class="code-row">
+    <div class="code-display" id="new-code" style="font-size:1.4rem; letter-spacing:.25em;">{{ new_code }}</div>
+    <button type="button" class="copy-btn" id="copy-new-code" data-code="{{ new_code }}">Copy code</button>
   </div>
-  {% endif %}
+  <p class="research-id">Research ID: {{ new_patient_id }} &middot; valid for 72 hours</p>
+</div>
+{% endif %}
 
-  <form method="POST" action="{{ url_for('researcher_generate_code') }}" style="margin-bottom: 28px;">
-    <button class="button" type="submit" style="width:auto; padding:12px 22px;">+ Generate enrollment code</button>
-  </form>
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Patients</div>
+    <div class="stat-value">{{ stats.total }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">48h+ recorded</div>
+    <div class="stat-value tone-sage">{{ stats.complete }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">In progress</div>
+    <div class="stat-value tone-gold">{{ stats.in_progress }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">No data yet</div>
+    <div class="stat-value tone-coral">{{ stats.no_data }}</div>
+  </div>
+</div>
 
-  {% if patients %}
+<div class="admin-toolbar">
   <input
     type="text"
     id="patient-search"
-    placeholder="Search by username or Research ID..."
+    placeholder="Search by username or research ID"
     autocomplete="off"
-    style="width:100%; padding:10px 14px; margin-bottom:16px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text-primary); font-size:14px;"
     onkeyup="filterPatients()"
   >
-  <table id="patient-table">
+  <form method="POST" action="{{ url_for('researcher_generate_code') }}" style="margin:0;">
+    <button class="btn btn-primary" type="submit">+ Generate enrollment code</button>
+  </form>
+</div>
+
+{% if patients %}
+<div class="table-wrap">
+  <table class="admin-table" id="patient-table">
     <thead>
       <tr>
-        <th>Username</th>
-        <th>Research ID</th>
-        <th>Enrolled</th>
+        <th class="sortable" data-sort="username" data-type="text">Username <span class="sort-arrow">&#8595;</span></th>
+        <th class="sortable" data-sort="patient_id" data-type="text">Research ID <span class="sort-arrow">&#8595;</span></th>
+        <th class="sortable" data-sort="status" data-type="text">Status <span class="sort-arrow">&#8595;</span></th>
+        <th class="sortable" data-sort="sessions" data-type="num">Sessions <span class="sort-arrow">&#8595;</span></th>
+        <th class="sortable" data-sort="enrolled" data-type="text">Enrolled <span class="sort-arrow">&#8595;</span></th>
+        <th class="sortable" data-sort="last_upload" data-type="text">Last upload <span class="sort-arrow">&#8595;</span></th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for p in patients %}
-      <tr data-search="{{ p.username|lower }} {{ p.patient_id|lower }}">
+      <tr data-search="{{ p.username|lower }} {{ p.patient_id|lower }}"
+          data-username="{{ p.username }}"
+          data-patient_id="{{ p.patient_id }}"
+          data-status="{{ p.status }}"
+          data-sessions="{{ p.session_count }}"
+          data-enrolled="{{ p.created_at[:10] }}"
+          data-last_upload="{{ p.last_upload.strftime('%Y-%m-%d %H:%M') if p.last_upload else '' }}">
         <td>{{ p.username }}</td>
         <td><code>{{ p.patient_id }}</code></td>
-        <td class="muted">{{ p.created_at[:10] }}</td>
-        <td><a href="{{ url_for('researcher_patient_detail', patient_id=p.patient_id) }}">View data →</a></td>
+        <td>
+          {% if p.status == 'complete' %}<span class="status-badge status-complete">48h+ recorded</span>
+          {% elif p.status == 'in_progress' %}<span class="status-badge status-in_progress">In progress</span>
+          {% else %}<span class="status-badge status-no_data">No data yet</span>
+          {% endif %}
+        </td>
+        <td>{{ p.session_count }}</td>
+        <td style="color:var(--ink-soft);">{{ p.created_at[:10] }}</td>
+        <td style="color:var(--ink-soft);">{{ p.last_upload.strftime('%Y-%m-%d %H:%M') if p.last_upload else '—' }}</td>
+        <td><a class="row-link" href="{{ url_for('researcher_patient_detail', patient_id=p.patient_id) }}">View data &rarr;</a></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <p id="patient-search-empty" class="muted" style="display:none;">No patients match that search.</p>
-  <script>
-    function filterPatients() {
-      const q = document.getElementById('patient-search').value.trim().toLowerCase();
-      const rows = document.querySelectorAll('#patient-table tbody tr');
-      let visibleCount = 0;
-      rows.forEach(row => {
-        const match = row.dataset.search.includes(q);
-        row.style.display = match ? '' : 'none';
-        if (match) visibleCount++;
-      });
-      document.getElementById('patient-search-empty').style.display = visibleCount === 0 ? '' : 'none';
-    }
-  </script>
-  {% else %}
-  <p>No patients enrolled yet.</p>
-  {% endif %}
+  <p id="patient-search-empty" class="admin-empty" style="display:none;">No patients match that search.</p>
 </div>
+{% else %}
+<div class="table-wrap">
+  <p class="admin-empty">No patients enrolled yet. Generate a code above to enroll your first patient.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+  function filterPatients() {
+    const q = document.getElementById('patient-search').value.trim().toLowerCase();
+    const rows = document.querySelectorAll('#patient-table tbody tr');
+    let visibleCount = 0;
+    rows.forEach(row => {
+      const match = row.dataset.search.includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    const empty = document.getElementById('patient-search-empty');
+    if (empty) empty.style.display = visibleCount === 0 ? '' : 'none';
+  }
+
+  (function () {
+    const table = document.getElementById('patient-table');
+    if (!table) return;
+    const tbody = table.querySelector('tbody');
+    let sortState = { key: null, dir: 1 };
+
+    table.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        const type = th.dataset.type;
+        sortState.dir = sortState.key === key ? -sortState.dir : 1;
+        sortState.key = key;
+
+        table.querySelectorAll('th.sortable').forEach(h => h.classList.remove('sort-active'));
+        th.classList.add('sort-active');
+        th.querySelector('.sort-arrow').innerHTML = sortState.dir === 1 ? '&#8595;' : '&#8593;';
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {
+          let av = a.dataset[key] || '';
+          let bv = b.dataset[key] || '';
+          if (type === 'num') { av = Number(av) || 0; bv = Number(bv) || 0; return (av - bv) * sortState.dir; }
+          return av.localeCompare(bv) * sortState.dir;
+        });
+        rows.forEach(r => tbody.appendChild(r));
+      });
+    });
+  })();
+
+  const copyBtn = document.getElementById('copy-new-code');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(copyBtn.dataset.code).then(() => {
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = original; }, 1800);
+      });
+    });
+  }
+</script>
 {% endblock %}

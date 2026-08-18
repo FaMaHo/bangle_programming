@@ -137,6 +137,48 @@ def _session_upload_date(session_path):
         return None
 
 
+def _patient_activity_summary(patient_id):
+    """Cheap upload-activity signal for the dashboard list: session count
+    plus the earliest/latest file mtime across all of a patient's sessions.
+    No CSV parsing, so this can run for every patient on every dashboard
+    load without being slow.
+
+    'complete' means the span between first and last upload is at least
+    48 hours — a proxy for "still enrolled and uploading across the full
+    window", not a guarantee the recording itself has no gaps."""
+    patient_path = os.path.join(UPLOAD_FOLDER, patient_id)
+    session_count = 0
+    mtimes = []
+
+    if os.path.isdir(patient_path):
+        for session_id in os.listdir(patient_path):
+            session_path = os.path.join(patient_path, session_id)
+            if not os.path.isdir(session_path):
+                continue
+            session_count += 1
+            try:
+                for f in os.listdir(session_path):
+                    mtimes.append(os.path.getmtime(os.path.join(session_path, f)))
+            except OSError:
+                continue
+
+    if not mtimes:
+        return {
+            'session_count': session_count,
+            'last_upload': None,
+            'status': 'no_data' if session_count == 0 else 'in_progress',
+        }
+
+    first_upload = datetime.fromtimestamp(min(mtimes))
+    last_upload = datetime.fromtimestamp(max(mtimes))
+    span_hours = (last_upload - first_upload).total_seconds() / 3600
+    return {
+        'session_count': session_count,
+        'last_upload': last_upload,
+        'status': 'complete' if span_hours >= 48 else 'in_progress',
+    }
+
+
 def researcher_web_required(fn):
     """Session-cookie auth for the browser-based researcher portal —
     separate from the JWT bearer-token auth used by the mobile app/API."""
@@ -447,22 +489,35 @@ def researcher_logout():
     return redirect(url_for('researcher_login'))
 
 
+def _patients_with_stats():
+    patients = accounts.list_patients()
+    for p in patients:
+        p.update(_patient_activity_summary(p['patient_id']))
+    stats = {
+        'total': len(patients),
+        'complete': sum(1 for p in patients if p['status'] == 'complete'),
+        'in_progress': sum(1 for p in patients if p['status'] == 'in_progress'),
+        'no_data': sum(1 for p in patients if p['status'] == 'no_data'),
+    }
+    return patients, stats
+
+
 @app.route('/researcher/dashboard')
 @researcher_web_required
 def researcher_dashboard():
-    patients = accounts.list_patients()
-    return render_template('researcher_dashboard.html', patients=patients, username=session.get('username'))
+    patients, stats = _patients_with_stats()
+    return render_template('researcher_dashboard.html', patients=patients, stats=stats)
 
 
 @app.route('/researcher/generate-code', methods=['POST'])
 @researcher_web_required
 def researcher_generate_code():
     code, patient_id = accounts.create_enrollment_code()
-    patients = accounts.list_patients()
+    patients, stats = _patients_with_stats()
     return render_template(
         'researcher_dashboard.html',
         patients=patients,
-        username=session.get('username'),
+        stats=stats,
         new_code=code,
         new_patient_id=patient_id,
     )

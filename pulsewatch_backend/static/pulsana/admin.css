@@ -1,0 +1,120 @@
+/* ==========================================================================
+   Pulsana — researcher portal
+   Admin-only components layered on top of style.css's tokens (paper/sage/
+   coral/gold, Fraunces + IBM Plex). Kept separate from the public site's
+   stylesheet so the marketing bundle doesn't carry table/dashboard CSS.
+   ========================================================================== */
+
+.admin-main{ padding:40px 0 80px; }
+.admin-header-row{
+  display:flex; justify-content:space-between; align-items:flex-end;
+  gap:20px; margin-bottom:28px; flex-wrap:wrap;
+}
+.admin-header-row p{ margin:4px 0 0; }
+.back-link{
+  font-family:var(--font-mono); font-size:.78rem; color:var(--ink-soft);
+  text-decoration:none; display:inline-flex; align-items:center; gap:6px;
+}
+.back-link:hover{ color:var(--sage-dark); }
+
+/* ---- stat cards ---- */
+.stat-grid{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:28px;
+}
+.stat-card{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius-m);
+  padding:16px 18px;
+}
+.stat-card .stat-label{
+  font-family:var(--font-mono); font-size:.7rem; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--ink-soft); margin-bottom:6px;
+}
+.stat-card .stat-value{
+  font-family:var(--font-display); font-size:1.7rem; font-weight:600; color:var(--ink);
+}
+.stat-value.tone-sage{ color:var(--sage-dark); }
+.stat-value.tone-gold{ color:var(--gold); }
+.stat-value.tone-coral{ color:var(--coral); }
+
+/* ---- toolbar ---- */
+.admin-toolbar{ display:flex; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+.admin-toolbar input[type="text"]{
+  flex:1; min-width:220px; font-family:var(--font-body); font-size:.92rem;
+  padding:11px 14px; border-radius:var(--radius-s); border:1px solid var(--line);
+  background:var(--card); color:var(--ink);
+}
+.admin-toolbar input[type="text"]:focus{ outline:2px solid var(--sage); outline-offset:-1px; }
+.admin-toolbar .btn{ padding:11px 20px; white-space:nowrap; }
+
+/* ---- table ---- */
+.table-wrap{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius-m);
+  overflow-x:auto; box-shadow:var(--shadow);
+}
+table.admin-table{ width:100%; border-collapse:collapse; font-size:.9rem; }
+.admin-table th, .admin-table td{ text-align:left; padding:12px 16px; white-space:nowrap; }
+.admin-table thead th{
+  font-family:var(--font-mono); font-size:.7rem; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--ink-soft); border-bottom:1px solid var(--line); font-weight:500;
+}
+.admin-table th.sortable{ cursor:pointer; user-select:none; }
+.admin-table th.sortable:hover{ color:var(--ink); }
+.admin-table th.sortable .sort-arrow{ display:inline-block; width:.8em; opacity:.4; }
+.admin-table th.sortable.sort-active .sort-arrow{ opacity:1; }
+.admin-table tbody tr{ border-bottom:1px solid var(--line); }
+.admin-table tbody tr:last-child{ border-bottom:0; }
+.admin-table tbody tr:hover{ background:var(--paper); }
+.admin-table code{
+  font-family:var(--font-mono); font-size:.83rem; color:var(--ink-soft);
+  background:var(--paper-2); padding:2px 7px; border-radius:6px;
+}
+.admin-table .row-link{ color:var(--sage-dark); font-weight:600; text-decoration:none; font-size:.85rem; }
+.admin-table .row-link:hover{ text-decoration:underline; }
+.admin-table input[type="checkbox"]{ accent-color:var(--sage); width:16px; height:16px; }
+.admin-empty{ padding:40px 16px; text-align:center; color:var(--ink-soft); }
+
+/* ---- status badges ---- */
+.status-badge{
+  display:inline-flex; align-items:center; font-family:var(--font-body); font-weight:600;
+  font-size:.76rem; padding:4px 11px; border-radius:999px; white-space:nowrap;
+}
+.status-badge.status-complete{ background:var(--sage-tint); color:var(--sage-dark); }
+.status-badge.status-in_progress{ background:#F8EDD4; color:#8A5A12; }
+.status-badge.status-no_data{ background:var(--coral-tint); color:#A14A3A; }
+
+/* ---- code / copy ---- */
+.code-row{ display:flex; align-items:center; gap:10px; margin:16px 0; }
+.code-row .code-display{ flex:1; margin:0; }
+.copy-btn{
+  font-family:var(--font-mono); font-size:.78rem; color:var(--sage-dark);
+  background:var(--sage-tint); border:0; border-radius:var(--radius-s);
+  padding:8px 14px; cursor:pointer; white-space:nowrap;
+}
+.copy-btn:hover{ background:var(--sage); color:#fff; }
+
+/* ---- danger zone ---- */
+.danger-zone{
+  margin-top:32px; border:1px solid #ecc2ca; background:var(--coral-tint);
+  border-radius:var(--radius-m); padding:20px 24px;
+}
+.danger-zone .eyebrow{ color:#A14A3A; margin-bottom:8px; }
+.danger-zone .eyebrow::before{ background:#A14A3A; }
+.danger-zone p{ font-size:.86rem; margin-bottom:14px; }
+.btn-danger{
+  background:transparent; border:1px solid var(--coral); color:#A14A3A;
+}
+.btn-danger:hover{ background:var(--coral); color:#fff; }
+.link-danger{
+  background:none; border:0; color:#A14A3A; cursor:pointer; font-size:.85rem;
+  font-weight:600; padding:6px 4px; font-family:var(--font-body);
+}
+.link-danger:hover{ text-decoration:underline; }
+
+/* ---- responsive ---- */
+@media (max-width:860px){
+  .stat-grid{ grid-template-columns:repeat(2,1fr); }
+}
+@media (max-width:520px){
+  .stat-grid{ grid-template-columns:1fr; }
+  .admin-toolbar{ flex-direction:column; }
+}
